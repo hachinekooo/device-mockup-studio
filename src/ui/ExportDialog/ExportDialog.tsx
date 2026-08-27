@@ -315,28 +315,35 @@ export function ExportControls() {
         <div className="control-group">
           <label>Screen detail</label>
           {matchSource ? (
-            <p className="hint">
-              {exportSize.limitedBy === 'none' ? (
-                <>
-                  Sized to your {coverage.sourceHeight}px {screenNoun}: every pixel of it
-                  survives{resized ? ` at ${exportSize.width} × ${exportSize.height}` : ''}.
-                </>
-              ) : exportSize.limitedBy === 'encoder' ? (
-                <>
-                  Capped at {exportSize.width} × {exportSize.height} by the H.264 encoder, which
-                  stops just above 4K. Your {coverage.sourceHeight}px {screenNoun} lands on{' '}
-                  <strong>{Math.round(exportSize.ratio * coverage.sourceHeight)}px</strong>. Switch
-                  to WebM or the PNG sequence to go larger — or use a portrait canvas, which needs
-                  far fewer pixels for the same device.
-                </>
-              ) : (
-                <>
-                  Capped at {exportSize.width} × {exportSize.height} by this GPU. Your{' '}
-                  {coverage.sourceHeight}px {screenNoun} lands on{' '}
-                  <strong>{Math.round(exportSize.ratio * coverage.sourceHeight)}px</strong>.
-                </>
+            <>
+              <p className="hint">
+                {exportSize.limitedBy === 'none' ? (
+                  <>
+                    Source matching enlarges the file to {exportSize.width} × {exportSize.height}{' '}
+                    so every pixel of your {coverage.sourceHeight}px {screenNoun} survives.
+                  </>
+                ) : exportSize.limitedBy === 'encoder' ? (
+                  <>
+                    Capped at {exportSize.width} × {exportSize.height} by the H.264 encoder, which
+                    stops just above 4K. Your {coverage.sourceHeight}px {screenNoun} lands on{' '}
+                    <strong>{Math.round(exportSize.ratio * coverage.sourceHeight)}px</strong>. Switch
+                    to WebM or the PNG sequence to go larger — or use a portrait canvas, which needs
+                    far fewer pixels for the same device.
+                  </>
+                ) : (
+                  <>
+                    Capped at {exportSize.width} × {exportSize.height} by this GPU. Your{' '}
+                    {coverage.sourceHeight}px {screenNoun} lands on{' '}
+                    <strong>{Math.round(exportSize.ratio * coverage.sourceHeight)}px</strong>.
+                  </>
+                )}
+              </p>
+              {resized && (
+                <button className="ghost-btn" onClick={() => setMatchSource(false)}>
+                  Use canvas dimensions ({output.width} × {output.height})
+                </button>
               )}
-            </p>
+            </>
           ) : (
             <p className="hint">
               Your {coverage.sourceHeight}px {screenNoun} is reproduced on{' '}
@@ -346,7 +353,7 @@ export function ExportControls() {
           )}
           {!matchSource && (
             <button className="ghost-btn" onClick={() => setMatchSource(true)}>
-              Match export to source
+              Match source resolution (enlarges export)
             </button>
           )}
         </div>

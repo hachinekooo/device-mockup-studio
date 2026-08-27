@@ -32,9 +32,8 @@ type ProjectStore = {
   setExportQuality: (q: ExportQuality) => void
   /**
    * Size the export from the screenshot rather than from the chosen output
-   * size. On by default: the screenshot is the only fixed-resolution asset in
-   * the scene, so it is the thing that should decide the pixel count. Typing
-   * a size turns it off.
+   * size. Opt-in: enabling it can create a much larger file, so the chosen
+   * canvas dimensions remain authoritative unless the user asks otherwise.
    */
   matchSource: boolean
   setMatchSource: (on: boolean) => void
@@ -141,13 +140,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   editorMode: 'image',
   activeDevice: 0,
   exportQuality: 'high',
-  matchSource: true,
+  matchSource: false,
 
   setExportQuality: (exportQuality) => set({ exportQuality }),
 
-  // On by default: the screenshot is the only fixed-resolution asset in the
-  // scene, so the export should be sized from it rather than from a preset
-  // the user then gets warned about. Typing a size turns it off.
+  // Opt-in because matching a tall source can multiply both output axes.
+  // Typing a size also turns it off, keeping the dimensions authoritative.
   setMatchSource: (matchSource: boolean) => set({ matchSource }),
 
   setEditorMode: (editorMode) => set({ editorMode }),
