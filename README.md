@@ -145,9 +145,6 @@ third-party models, textures, icons, or other media.
 - Do not add a model without recording its source, license, required notices,
   and distributed-file checksum.
 
-The Google Pixel model currently remains enabled while explicit raw-model
-redistribution permission is being requested from its creator.
-
 ## Contributing
 
 Issues and pull requests are welcome. Keep rendering changes deterministic:
