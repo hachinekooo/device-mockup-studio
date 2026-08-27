@@ -127,14 +127,6 @@ The detailed implementation history and rendering decisions are documented in
 [`CONTEXT.md`](CONTEXT.md). The original product and architecture specification
 is in [`mockup-app-spec.md`](mockup-app-spec.md).
 
-## Known limitations
-
-- Timeline keyframes are displayed but are not yet draggable in the timeline.
-- Text/annotation layers, depth of field, and motion blur are placeholders.
-- Video codec and alpha support vary by browser, OS, resolution, and GPU.
-- The editor has not yet received broad cross-browser or mobile testing.
-- Large GLBs contribute significantly to repository and deployment size.
-
 ## Device models and other assets
 
 The Apache-2.0 license applies to the project source code, not automatically to
