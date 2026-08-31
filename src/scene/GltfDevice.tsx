@@ -13,6 +13,7 @@ import {
 import { prepareScreenTexture } from './materials/screenTexture'
 import { createScreenVideo } from '../media/screenVideo'
 import type { MediaRef, ScreenFit } from '../store/schema'
+import type { MaterialOverride } from '../devices/manifest'
 
 type GltfDeviceProps = {
   url: string
@@ -33,7 +34,7 @@ type GltfDeviceProps = {
   screen: MediaRef | null
   screenFit: ScreenFit
   /** Per-material overrides for the selected colorway. */
-  colorwayMaterials: Record<string, { color?: string; roughness?: number; metalness?: number }>
+  colorwayMaterials: Record<string, MaterialOverride>
 }
 
 // A screenshot captured at (or near) this device's real screen aspect gets

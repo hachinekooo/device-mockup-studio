@@ -5,6 +5,7 @@ import { roundedRectBodyGeometry, roundedRectPlaneGeometry } from './geometry'
 import { createBodyMaterial, createGlassMaterial, createScreenMaterial } from './materials'
 import { coverCropRepeatOffset, fitPlaneSize } from './screenFit'
 import { prepareScreenTexture } from './materials/screenTexture'
+import type { MaterialOverride } from '../devices/manifest'
 import { createScreenVideo } from '../media/screenVideo'
 import type { MediaRef, ScreenFit } from '../store/schema'
 
@@ -22,7 +23,7 @@ const SCREEN_RADIUS = 0.1
 type DeviceProps = {
   screen: MediaRef | null
   screenFit: ScreenFit
-  colorwayMaterials: Record<string, { color?: string; roughness?: number; metalness?: number }>
+  colorwayMaterials: Record<string, MaterialOverride>
 }
 
 export function Device({ screen, screenFit, colorwayMaterials }: DeviceProps) {

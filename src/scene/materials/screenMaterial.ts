@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import type { MaterialOverride } from '../../devices/manifest'
 
 /**
  * Unlit screen material with an explicit UV transform and a hard black
@@ -296,9 +297,14 @@ export function findScreenMesh(root: THREE.Object3D, materialName: string): THRE
  * a mesh name because that is the only identifier GLTFLoader leaves intact —
  * see `findScreenMesh`.
  */
+// A colourway can be changed repeatedly on one cloned scene. Always derive
+// the next material from the original GLTF material rather than the previous
+// swatch's clone; otherwise a removed colour map can never be restored.
+const colorwaySourceMaterials = new WeakMap<THREE.Material, THREE.Material>()
+
 export function applyColorway(
   root: THREE.Object3D,
-  overrides: Record<string, { color?: string; roughness?: number; metalness?: number }>,
+  overrides: Record<string, MaterialOverride>,
   skipMaterialName?: string,
 ) {
   root.traverse((obj) => {
@@ -308,12 +314,21 @@ export function applyColorway(
     const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
     const next = materials.map((material) => {
       if (material?.name === skipMaterialName) return material
-      const override = overrides[material.name]
-      if (!override) return material
-      const clone = material.clone() as THREE.MeshStandardMaterial
+      const source = colorwaySourceMaterials.get(material) ?? material
+      const override = overrides[source.name]
+      // An "as authored" finish deliberately has no overrides. If this
+      // material came from an earlier colourway, put the GLTF source back;
+      // untouched materials keep their existing identity.
+      if (!override) return source
+      const clone = source.clone() as THREE.MeshStandardMaterial
+      colorwaySourceMaterials.set(clone, source)
       if (override.color) clone.color = new THREE.Color(override.color)
       if (override.roughness !== undefined) clone.roughness = override.roughness
       if (override.metalness !== undefined) clone.metalness = override.metalness
+      if (override.removeColorMap) {
+        clone.map = null
+        clone.needsUpdate = true
+      }
       return clone
     })
     mesh.material = Array.isArray(mesh.material) ? next : next[0]
