@@ -1,5 +1,17 @@
 import type { DeviceId, Vec3 } from '../store/schema'
 
+export type MaterialOverride = {
+  color?: string
+  roughness?: number
+  metalness?: number
+  /**
+   * Ignore the GLB's authored base-colour texture while retaining its normal
+   * and metallic/roughness maps. Useful when a texture bakes in one finish
+   * colour but still carries surface detail worth preserving.
+   */
+  removeColorMap?: boolean
+}
+
 /**
  * Device descriptor (§7.1). One of these per model; the scene reads only
  * this, never a hardcoded device branch.
@@ -61,7 +73,7 @@ export type DeviceManifest = {
     id: string
     name: string
     swatch: string
-    materials: Record<string, { color?: string; roughness?: number; metalness?: number }>
+    materials: Record<string, MaterialOverride>
   }[]
 }
 
@@ -76,6 +88,16 @@ export type DeviceManifest = {
 // (a freshly cloned scene has no world matrix, so Box3 reads back garbage).
 const IPHONE_17_PRO_SCREEN_MESH = { width: 76.413, height: 159.514 }
 const IPHONE_17_PRO_SCREEN_OPENING = { width: 71.465, height: 154.568 }
+
+// These are the material names embedded in the third-party GLB. Keep the
+// opaque source names in one place and use their visual meaning everywhere
+// else, so replacing the asset requires one mapping update rather than edits
+// across every finish.
+const IPHONE_17_PRO_MATERIALS = {
+  bodyAndBack: 'Material.002',
+  cameraRings: 'Material.004',
+  frameAndButtons: 'Rim_Buttons',
+} as const
 
 export const DEVICE_MANIFESTS: Record<DeviceId, DeviceManifest> = {
   'procedural-phone': {
@@ -114,22 +136,82 @@ export const DEVICE_MANIFESTS: Record<DeviceId, DeviceManifest> = {
     defaultCamera: { position: [-2.2, 0.9, 2.4], fov: 32 },
     colorways: [
       {
+        id: 'original-blue',
+        name: 'Original Blue',
+        swatch: '#588e9b',
+        // Preserve the finish authored into the source GLB and used by the
+        // repository's original product renders. This remains the default;
+        // the titanium finishes below are optional full-device overrides.
+        materials: {},
+      },
+      {
         id: 'natural-titanium',
         name: 'Natural Titanium',
         swatch: '#b7b0a6',
-        materials: { Rim_Buttons: { color: '#b7b0a6', roughness: 0.3, metalness: 0.9 } },
+        materials: {
+          [IPHONE_17_PRO_MATERIALS.cameraRings]: {
+            color: '#b7b0a6',
+            roughness: 0.24,
+            metalness: 0.72,
+          },
+          [IPHONE_17_PRO_MATERIALS.bodyAndBack]: {
+            color: '#bcb6ad',
+            roughness: 0.36,
+            metalness: 0.2,
+          },
+          [IPHONE_17_PRO_MATERIALS.frameAndButtons]: {
+            color: '#b7b0a6',
+            roughness: 0.3,
+            metalness: 0.9,
+            removeColorMap: true,
+          },
+        },
       },
       {
         id: 'black-titanium',
         name: 'Black Titanium',
         swatch: '#3a3a3c',
-        materials: { Rim_Buttons: { color: '#3a3a3c', roughness: 0.32, metalness: 0.9 } },
+        materials: {
+          [IPHONE_17_PRO_MATERIALS.cameraRings]: {
+            color: '#35363a',
+            roughness: 0.25,
+            metalness: 0.72,
+          },
+          [IPHONE_17_PRO_MATERIALS.bodyAndBack]: {
+            color: '#2f3033',
+            roughness: 0.34,
+            metalness: 0.2,
+          },
+          [IPHONE_17_PRO_MATERIALS.frameAndButtons]: {
+            color: '#3a3a3c',
+            roughness: 0.32,
+            metalness: 0.9,
+            removeColorMap: true,
+          },
+        },
       },
       {
         id: 'white-titanium',
         name: 'White Titanium',
         swatch: '#e6e3de',
-        materials: { Rim_Buttons: { color: '#e6e3de', roughness: 0.28, metalness: 0.9 } },
+        materials: {
+          [IPHONE_17_PRO_MATERIALS.cameraRings]: {
+            color: '#e5e2dc',
+            roughness: 0.23,
+            metalness: 0.7,
+          },
+          [IPHONE_17_PRO_MATERIALS.bodyAndBack]: {
+            color: '#efede8',
+            roughness: 0.36,
+            metalness: 0.16,
+          },
+          [IPHONE_17_PRO_MATERIALS.frameAndButtons]: {
+            color: '#e6e3de',
+            roughness: 0.28,
+            metalness: 0.88,
+            removeColorMap: true,
+          },
+        },
       },
     ],
   },

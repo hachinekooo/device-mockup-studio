@@ -86,6 +86,20 @@ describe('device manifests', () => {
     }
   })
 
+  it('repaints the iPhone 17 Pro exterior for every advertised finish', () => {
+    const manifest = getManifest('iphone-17-pro')
+    const [original, ...customFinishes] = manifest.colorways
+    expect(original.id).toBe('original-blue')
+    expect(original.materials).toEqual({})
+
+    for (const colorway of customFinishes) {
+      expect(Object.keys(colorway.materials), colorway.id).toEqual(
+        expect.arrayContaining(['Material.004', 'Material.002', 'Rim_Buttons']),
+      )
+      expect(colorway.materials.Rim_Buttons.removeColorMap, colorway.id).toBe(true)
+    }
+  })
+
   it('resolves every id through getManifest', () => {
     for (const manifest of DEVICE_LIST) {
       expect(getManifest(manifest.id)).toBe(manifest)

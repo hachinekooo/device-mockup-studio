@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react'
-import { Smartphone, RectangleHorizontal, Info, ChevronDown } from 'lucide-react'
+import { Smartphone, RectangleHorizontal, Info, ChevronDown, Check } from 'lucide-react'
 import { Segmented } from '../controls/Segmented'
 import { useProjectStore } from '../../store/project'
 import { DEVICE_LIST, getManifest } from '../../devices/manifest'
@@ -189,16 +189,30 @@ export function ScreenContent() {
       </div>
 
       <div className="control-group">
-        <label>Finish</label>
-        <div className="swatch-row">
+        <label id="device-finish-label">Device finish</label>
+        <div className="finish-list" role="radiogroup" aria-labelledby="device-finish-label">
           {colorways.map((c) => (
-            <button
+            <label
               key={c.id}
               title={c.name}
-              className={c.id === colorway ? 'swatch active' : 'swatch'}
-              style={{ background: c.swatch }}
-              onClick={() => setColorway(c.id)}
-            />
+              className={c.id === colorway ? 'finish-option active' : 'finish-option'}
+            >
+              <input
+                className="finish-radio"
+                type="radio"
+                name="device-finish"
+                value={c.id}
+                checked={c.id === colorway}
+                onChange={() => setColorway(c.id)}
+              />
+              <span
+                className="finish-swatch"
+                style={{ background: c.swatch }}
+                aria-hidden="true"
+              />
+              <span className="finish-name">{c.name}</span>
+              <Check className="finish-check" size={14} aria-hidden="true" />
+            </label>
           ))}
         </div>
       </div>

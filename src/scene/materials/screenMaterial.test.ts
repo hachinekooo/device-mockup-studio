@@ -7,6 +7,8 @@ function buildModel() {
   // material instance.
   const shared = new THREE.MeshStandardMaterial({ color: '#ffffff' })
   shared.name = 'Rim_Buttons'
+  const colorMap = new THREE.Texture()
+  shared.map = colorMap
   const other = new THREE.MeshStandardMaterial({ color: '#111111' })
   other.name = 'Screen_Glass'
   // The screen carries its own material, as every real model does — the
@@ -25,7 +27,7 @@ function buildModel() {
   screen.name = 'Screen'
   root.add(bodyA, bodyB, glass, screen)
 
-  return { root, shared, other, screenMat, bodyA, bodyB, glass, screen }
+  return { root, shared, other, screenMat, colorMap, bodyA, bodyB, glass, screen }
 }
 
 const OVERRIDES = { Rim_Buttons: { color: '#3a3a3c', roughness: 0.32, metalness: 0.9 } }
@@ -74,6 +76,25 @@ describe('applyColorway', () => {
     const after = m.bodyA.material as THREE.MeshStandardMaterial
     expect(`#${after.color.getHexString()}`).toBe('#ff0000')
     expect(after.roughness).toBeCloseTo(before, 6)
+  })
+
+  it('can remove an authored colour map without mutating the GLTF source', () => {
+    const m = buildModel()
+    applyColorway(
+      m.root,
+      { Rim_Buttons: { color: '#e6e3de', removeColorMap: true } },
+      'Screen',
+    )
+    expect((m.bodyA.material as THREE.MeshStandardMaterial).map).toBeNull()
+    expect(m.shared.map).toBe(m.colorMap)
+  })
+
+  it('restores the authored source material when switching to an empty colorway', () => {
+    const m = buildModel()
+    applyColorway(m.root, { Rim_Buttons: { removeColorMap: true } }, 'Screen')
+    applyColorway(m.root, {}, 'Screen')
+    expect(m.bodyA.material).toBe(m.shared)
+    expect((m.bodyA.material as THREE.MeshStandardMaterial).map).toBe(m.colorMap)
   })
 
   it('is idempotent across repeated swatch changes', () => {
