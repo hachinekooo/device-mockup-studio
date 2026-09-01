@@ -5,7 +5,13 @@ import { emptyHistory, record, redo, resetCoalescing, undo, type History } from 
 import type { ExportQuality } from '../export/frameRenderer'
 import { deserializeProject, downloadProject, pruneUnreferencedMedia, serializeProject } from './persist'
 import { applyCameraAngle, applyMotionPreset, type MotionPresetId } from '../timeline/presets'
-import { setVec3At, setValueAt } from '../timeline/tracks'
+import { sampleTimeline } from '../timeline/sample'
+import {
+  removeTrackValuesAt,
+  setTrackValuesAt,
+  setVec3At,
+  setValueAt,
+} from '../timeline/tracks'
 import { getManifest } from '../devices/manifest'
 import type {
   BackgroundConfig,
@@ -77,6 +83,10 @@ type ProjectStore = {
   setDevicePosition: (v: Vec3) => void
   setDeviceScale: (v: number) => void
   setMotionPreset: (preset: MotionPresetId) => void
+  addCameraKeyframe: (t: number) => void
+  addDeviceKeyframe: (t: number) => void
+  deleteCameraKeyframe: (t: number) => void
+  deleteDeviceKeyframe: (t: number) => void
 }
 
 // Narrow selectors are used at call sites (§14 trap 10) — components should
@@ -259,6 +269,76 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       ...d,
       transform: { ...d.transform, scale: setValueAt(d.transform.scale, get().playhead, v) },
     })),
+  addCameraKeyframe: (t) =>
+    edit('addCameraKeyframe', (p) => {
+      const time = Math.min(p.duration, Math.max(0, t))
+      const camera = sampleTimeline(p, time).camera
+      return {
+        ...p,
+        camera: {
+          ...p.camera,
+          preset: null,
+          tracks: setTrackValuesAt(p.camera.tracks, time, {
+            'position.x': camera.position[0],
+            'position.y': camera.position[1],
+            'position.z': camera.position[2],
+            'target.x': camera.target[0],
+            'target.y': camera.target[1],
+            'target.z': camera.target[2],
+            fov: camera.fov,
+          }),
+        },
+      }
+    }),
+  addDeviceKeyframe: (t) => {
+    const active = get().activeDevice
+    edit('addDeviceKeyframe', (p) => {
+      const time = Math.min(p.duration, Math.max(0, t))
+      const state = sampleTimeline(p, time).devices[active]
+      if (!state) return p
+      return {
+        ...p,
+        devices: p.devices.map((device, index) =>
+          index === active
+            ? {
+                ...device,
+                transform: setTrackValuesAt(device.transform, time, {
+                  'position.x': state.position[0],
+                  'position.y': state.position[1],
+                  'position.z': state.position[2],
+                  'rotation.x': state.rotation[0],
+                  'rotation.y': state.rotation[1],
+                  'rotation.z': state.rotation[2],
+                  scale: state.scale,
+                }),
+              }
+            : device,
+        ),
+      }
+    })
+  },
+  deleteCameraKeyframe: (t) => {
+    const tracks = get().project.camera.tracks
+    const next = removeTrackValuesAt(tracks, t)
+    if (next === tracks) return
+    edit('deleteCameraKeyframe', (p) => ({
+      ...p,
+      camera: { ...p.camera, preset: null, tracks: next },
+    }))
+  },
+  deleteDeviceKeyframe: (t) => {
+    const active = get().activeDevice
+    const tracks = get().project.devices[active]?.transform
+    if (!tracks) return
+    const next = removeTrackValuesAt(tracks, t)
+    if (next === tracks) return
+    edit('deleteDeviceKeyframe', (p) => ({
+      ...p,
+      devices: p.devices.map((device, index) =>
+        index === active ? { ...device, transform: next } : device,
+      ),
+    }))
+  },
   setMotionPreset: (preset) => {
     set({ motionPreset: preset })
     edit('motionPreset', (p) => applyMotionPreset(p, preset))

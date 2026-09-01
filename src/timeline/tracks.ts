@@ -43,6 +43,45 @@ export function removeKey(track: Track | undefined, t: number): Track {
 }
 
 /**
+ * Remove a key without leaving a scalar channel empty. A one-key track is
+ * the document's representation of a static value, so deleting its final
+ * key would silently replace the user's value with a sampler fallback.
+ */
+export function removeKeySafely(track: Track | undefined, t: number): Track | undefined {
+  if (!track || track.keys.length <= 1) return track
+  const next = removeKey(track, t)
+  return next.keys.length === track.keys.length ? track : next
+}
+
+/** Write a complete object pose at one time, including static channels. */
+export function setTrackValuesAt(
+  tracks: TrackSet,
+  t: number,
+  values: Record<string, number>,
+): TrackSet {
+  let changed = false
+  const next = { ...tracks }
+  for (const [channel, value] of Object.entries(values)) {
+    const track = setKey(tracks[channel], t, value)
+    next[channel] = track
+    if (track !== tracks[channel]) changed = true
+  }
+  return changed ? next : tracks
+}
+
+/** Remove every removable scalar key represented by one aggregate diamond. */
+export function removeTrackValuesAt(tracks: TrackSet, t: number): TrackSet {
+  let changed = false
+  const next: TrackSet = {}
+  for (const [channel, track] of Object.entries(tracks)) {
+    const result = removeKeySafely(track, t) ?? track
+    next[channel] = result
+    if (result !== track) changed = true
+  }
+  return changed ? next : tracks
+}
+
+/**
  * Set a channel's value at `t`. On a static (single-key) channel this edits
  * that key in place rather than adding a second one, so scrubbing the
  * timeline and typing in a number can't accidentally create animation.

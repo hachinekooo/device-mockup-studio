@@ -112,6 +112,32 @@ describe('device transform actions', () => {
     expect(track.keys.find((k) => k.t === 1)?.v).toBeCloseTo(0.75, 6)
   })
 
+  it('adds, edits, and deletes a complete device keyframe without a preset', () => {
+    const store = () => useProjectStore.getState()
+    store().addDeviceKeyframe(1)
+
+    const keyed = store().project.devices[0].transform
+    expect(Object.values(keyed).every((track) => track.keys.length === 2)).toBe(true)
+
+    useProjectStore.setState({ playhead: 1 })
+    store().setDevicePosition([0.75, 0.25, -0.1])
+    expect(store().project.devices[0].transform['position.x'].keys).toHaveLength(2)
+    expect(resolved(0).position).toEqual([0.75, 0.25, -0.1])
+
+    store().deleteDeviceKeyframe(1)
+    expect(Object.values(store().project.devices[0].transform).every((track) => track.keys.length === 1)).toBe(true)
+    expect(resolved(0).position).toEqual([0, 0, 0])
+  })
+
+  it('adds and deletes an exact camera keyframe', () => {
+    const store = () => useProjectStore.getState()
+    store().addCameraKeyframe(1.5)
+    expect(Object.values(store().project.camera.tracks).every((track) => track.keys.length === 2)).toBe(true)
+
+    store().deleteCameraKeyframe(1.5)
+    expect(Object.values(store().project.camera.tracks).every((track) => track.keys.length === 1)).toBe(true)
+  })
+
   it('is undoable', () => {
     useProjectStore.getState().setDevicePosition([0.4, 0, 0])
     resetCoalescing()
