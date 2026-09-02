@@ -3,7 +3,7 @@ import { useProjectStore } from './project'
 import { createDefaultProject, createDevice } from './defaults'
 import { emptyHistory, resetCoalescing } from './history'
 import { sampleTimeline } from '../timeline/sample'
-import { keyTimes } from '../timeline/tracks'
+import { editableKeyTimes, keyTimes } from '../timeline/tracks'
 import { aggregateEasingAt } from '../timeline/easing'
 
 /**
@@ -265,6 +265,22 @@ describe('device transform actions', () => {
     expect(Object.values(store().project.camera.tracks).every((track) => track.keys.length === 13)).toBe(true)
     expect(sampleTimeline(store().project, 0).camera.position[1]).toBe(-1)
     expect(sampleTimeline(store().project, store().project.duration).camera.position[1]).toBe(0.9)
+  })
+
+  it('removes the Orbit start diamond without exposing protected static channels', () => {
+    const store = () => useProjectStore.getState()
+    useProjectStore.setState({ editorMode: 'movie' })
+    store().setMotionPreset('orbit')
+    useProjectStore.setState({ history: emptyHistory })
+
+    expect(editableKeyTimes(store().project.camera.tracks)).toContain(0)
+    store().deleteCameraKeyframe(0)
+
+    expect(keyTimes(store().project.camera.tracks)).toContain(0)
+    expect(editableKeyTimes(store().project.camera.tracks)).not.toContain(0)
+
+    store().undo()
+    expect(editableKeyTimes(store().project.camera.tracks)).toContain(0)
   })
 
   it('is undoable', () => {

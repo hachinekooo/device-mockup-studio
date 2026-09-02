@@ -3,7 +3,6 @@ import {
   useEffect,
   useRef,
   useState,
-  type PointerEvent as ReactPointerEvent,
 } from 'react'
 import {
   ChevronLeft,
@@ -13,33 +12,55 @@ import {
   Plus,
   SkipBack,
   SkipForward,
-  SlidersHorizontal,
   Trash2,
-  X,
 } from 'lucide-react'
 import { useProjectStore } from '../../store/project'
 import { MOTION_PRESETS, type MotionPresetId } from '../../timeline/presets'
-import { keyTimes } from '../../timeline/tracks'
+import { editableKeyTimes, hasEditableKeyAtTime } from '../../timeline/tracks'
 import { isAnimated, tracksEnd } from '../../timeline/sample'
 import {
   aggregateEasingAt,
-  EASE_SMOOTH,
-  NAMED_EASINGS,
-  normalizeEaseHandle,
-  type AggregateEasing,
   type NamedEasing,
 } from '../../timeline/easing'
-import type { EaseHandle } from '../../store/schema'
+import type { EaseHandle, Project, TrackSet } from '../../store/schema'
 import {
   adjacentKeyTime,
   formatTimecode,
-  parseTimelineTime,
   snapTimeToFrame,
   timelineTimeAtPointer,
 } from './timelineMath'
+import {
+  recordedRetimeSelectionTime,
+  retimedSelectionTime,
+  type RetimeTransition,
+} from './timelineSelection'
+import { KeyframeEasingControl } from './KeyframeEasingControl'
+import { TimecodeField } from './TimecodeField'
+import { TrackRow } from './TrackRow'
+import type { TrackTarget } from './types'
 
-type TrackTarget = 'camera' | 'device'
 type KeySelection = { target: TrackTarget; time: number; deviceInstanceId?: string }
+
+function tracksForSelection(
+  project: Project,
+  activeDevice: number,
+  selection: KeySelection,
+): TrackSet | null {
+  if (selection.target === 'camera') return project.camera.tracks
+  const device = project.devices[activeDevice]
+  return device?.instanceId === selection.deviceInstanceId ? device.transform : null
+}
+
+function selectionExists(project: Project, activeDevice: number, selection: KeySelection): boolean {
+  const tracks = tracksForSelection(project, activeDevice, selection)
+  return tracks !== null && hasEditableKeyAtTime(tracks, selection.time)
+}
+
+function selectionScope(selection: KeySelection): string {
+  return selection.target === 'camera'
+    ? 'camera'
+    : `device:${selection.deviceInstanceId ?? 'missing'}`
+}
 
 /**
  * Compact object-level timeline. Each diamond represents all scalar keys for
@@ -66,8 +87,15 @@ export function TimelineBar() {
   const setCameraKeyframeEase = useProjectStore((s) => s.setCameraKeyframeEase)
   const setDeviceKeyframeEase = useProjectStore((s) => s.setDeviceKeyframeEase)
   const [activeTrack, setActiveTrack] = useState<TrackTarget>('device')
-  const [selection, setSelection] = useState<KeySelection | null>(null)
+  const [selection, setSelectionState] = useState<KeySelection | null>(null)
+  const selectionRef = useRef<KeySelection | null>(null)
   const timelineRef = useRef<HTMLDivElement>(null)
+  const retimeTransitionsRef = useRef<RetimeTransition<Project>[]>([])
+
+  const setSelection = useCallback((next: KeySelection | null) => {
+    selectionRef.current = next
+    setSelectionState(next)
+  }, [])
 
   const duration = project.duration
   const pct = (t: number) => `${(t / duration) * 100}%`
@@ -81,20 +109,18 @@ export function TimelineBar() {
     timelineRef.current?.focus({ preventScroll: true })
   }
 
-  const cameraKeys = keyTimes(project.camera.tracks)
+  const cameraKeys = editableKeyTimes(project.camera.tracks)
   const active = useProjectStore((s) => s.activeDevice)
   const deviceTracks = project.devices[active]?.transform ?? {}
   const activeDeviceInstanceId = project.devices[active]?.instanceId
-  const deviceKeys = keyTimes(deviceTracks)
+  const deviceKeys = editableKeyTimes(deviceTracks)
   const cameraAnimated = isAnimated(project.camera.tracks)
   const deviceAnimated = isAnimated(deviceTracks)
   const activeKeys = activeTrack === 'camera' ? cameraKeys : deviceKeys
   const previousKey = adjacentKeyTime(activeKeys, playhead, -1)
   const nextKey = adjacentKeyTime(activeKeys, playhead, 1)
   const currentSelection =
-    selection?.target === 'device' && selection.deviceInstanceId !== activeDeviceInstanceId
-      ? null
-      : selection
+    selection && selectionExists(project, active, selection) ? selection : null
   const selectedTracks = currentSelection?.target === 'camera' ? project.camera.tracks : deviceTracks
   const selectedEasing = currentSelection
     ? aggregateEasingAt(selectedTracks, currentSelection.time)
@@ -125,23 +151,54 @@ export function TimelineBar() {
     })
   }
 
-  function moveKeyframe(target: TrackTarget, from: number, to: number) {
-    const time = snapTimeToFrame(to, project.fps, duration)
-    if (Math.abs(from - time) < 1e-6) return
-    setPlaying(false)
-    if (target === 'camera') moveCameraKeyframe(from, time)
-    else moveDeviceKeyframe(from, time)
-    setPlayhead(time)
-    setActiveTrack(target)
-    setSelection({
-      target,
-      time,
-      deviceInstanceId: target === 'device' ? activeDeviceInstanceId : undefined,
-    })
-    requestAnimationFrame(() => {
-      timelineRef.current?.querySelector<HTMLButtonElement>('.keyframe.selected')?.focus()
-    })
-  }
+  const moveKeyframe = useCallback(
+    (target: TrackTarget, from: number, to: number) => {
+      const time = snapTimeToFrame(to, project.fps, duration)
+      if (Math.abs(from - time) < 1e-6) return
+      setPlaying(false)
+      const restoreKeyFocus = document.activeElement?.classList.contains('keyframe') === true
+      const before = useProjectStore.getState().project
+      if (target === 'camera') moveCameraKeyframe(from, time)
+      else moveDeviceKeyframe(from, time)
+      const after = useProjectStore.getState().project
+      if (after !== before) {
+        retimeTransitionsRef.current = [
+          ...retimeTransitionsRef.current,
+          {
+            before,
+            after,
+            scope:
+              target === 'camera'
+                ? 'camera'
+                : `device:${activeDeviceInstanceId ?? 'missing'}`,
+            from,
+            to: time,
+            restoreKeyFocus,
+          },
+        ].slice(-100)
+      }
+      setPlayhead(time)
+      setActiveTrack(target)
+      setSelection({
+        target,
+        time,
+        deviceInstanceId: target === 'device' ? activeDeviceInstanceId : undefined,
+      })
+      requestAnimationFrame(() => {
+        timelineRef.current?.querySelector<HTMLButtonElement>('.keyframe.selected')?.focus()
+      })
+    },
+    [
+      activeDeviceInstanceId,
+      duration,
+      moveCameraKeyframe,
+      moveDeviceKeyframe,
+      project.fps,
+      setPlayhead,
+      setPlaying,
+      setSelection,
+    ],
+  )
 
   function setSelectedEasing(easing: NamedEasing) {
     if (!currentSelection) return
@@ -168,7 +225,7 @@ export function TimelineBar() {
     if (currentSelection.target === 'camera') deleteCameraKeyframe(currentSelection.time)
     else deleteDeviceKeyframe(currentSelection.time)
     setSelection(null)
-  }, [currentSelection, deleteCameraKeyframe, deleteDeviceKeyframe])
+  }, [currentSelection, deleteCameraKeyframe, deleteDeviceKeyframe, setSelection])
 
   const seekTo = useCallback(
     (time: number) => {
@@ -176,7 +233,7 @@ export function TimelineBar() {
       setSelection(null)
       setPlayhead(snapTimeToFrame(time, project.fps, duration))
     },
-    [duration, project.fps, setPlayhead, setPlaying],
+    [duration, project.fps, setPlayhead, setPlaying, setSelection],
   )
 
   const stepFrames = useCallback(
@@ -197,6 +254,14 @@ export function TimelineBar() {
       if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
         event.preventDefault()
         const direction = event.key === 'ArrowLeft' ? -1 : 1
+        if (event.altKey && currentSelection && target?.closest('.keyframe')) {
+          moveKeyframe(
+            currentSelection.target,
+            currentSelection.time,
+            currentSelection.time + (direction * (event.shiftKey ? 10 : 1)) / project.fps,
+          )
+          return
+        }
         stepFrames(direction * (event.shiftKey ? 10 : 1))
         return
       }
@@ -208,7 +273,56 @@ export function TimelineBar() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [currentSelection, deleteSelected, duration, seekTo, stepFrames])
+  }, [currentSelection, deleteSelected, duration, moveKeyframe, project.fps, seekTo, stepFrames])
+
+  useEffect(
+    () =>
+      useProjectStore.subscribe((state, previous) => {
+        if (state.project === previous.project && state.activeDevice === previous.activeDevice) return
+        const current = selectionRef.current
+        if (!current) return
+        const hadKeyFocus = document.activeElement?.classList.contains('keyframe') === true
+        const beforeTracks = tracksForSelection(previous.project, previous.activeDevice, current)
+        const afterTracks = tracksForSelection(state.project, state.activeDevice, current)
+        const recordedSelection = recordedRetimeSelectionTime(
+          retimeTransitionsRef.current,
+          previous.project,
+          state.project,
+          selectionScope(current),
+          current.time,
+        )
+        const replacementTime = recordedSelection?.time ?? (
+          beforeTracks && afterTracks
+            ? retimedSelectionTime(beforeTracks, afterTracks, current.time)
+            : null
+        )
+
+        if (
+          replacementTime !== null &&
+          afterTracks &&
+          hasEditableKeyAtTime(afterTracks, replacementTime)
+        ) {
+          const replacement = { ...current, time: replacementTime }
+          setSelection(replacement)
+          state.setPlayhead(replacementTime)
+          setActiveTrack(current.target)
+          if (hadKeyFocus || recordedSelection?.restoreKeyFocus) {
+            requestAnimationFrame(() => {
+              timelineRef.current?.querySelector<HTMLButtonElement>('.keyframe.selected')?.focus()
+            })
+          }
+          return
+        }
+
+        if (selectionExists(state.project, state.activeDevice, current)) return
+
+        setSelection(null)
+        if (hadKeyFocus) {
+          requestAnimationFrame(() => timelineRef.current?.focus({ preventScroll: true }))
+        }
+      }),
+    [setSelection],
+  )
 
   useEffect(() => {
     function clearSelectionOutsideTimeline(event: PointerEvent) {
@@ -217,13 +331,13 @@ export function TimelineBar() {
     }
     window.addEventListener('pointerdown', clearSelectionOutsideTimeline, true)
     return () => window.removeEventListener('pointerdown', clearSelectionOutsideTimeline, true)
-  }, [])
+  }, [setSelection])
 
   // One tick per second, plus a half-second subdivision for readability.
   const seconds = Math.ceil(duration)
 
   return (
-    <div className="timeline" ref={timelineRef} tabIndex={-1}>
+    <div className="timeline" ref={timelineRef} tabIndex={-1} role="region" aria-label="Timeline">
       <div className="timeline-toolbar">
         <button className="play-btn" onClick={() => setPlaying(!playing)} title={playing ? 'Pause' : 'Play'}>
           {playing ? <Pause size={16} /> : <Play size={16} />}
@@ -427,456 +541,6 @@ export function TimelineBar() {
             onCustomChange={setSelectedCustomEase}
           />
         )}
-      </div>
-    </div>
-  )
-}
-
-const EASING_LABELS: Record<NamedEasing, string> = {
-  linear: 'Linear',
-  'ease-in': 'Ease In',
-  'ease-out': 'Ease Out',
-  'ease-in-out': 'Ease In Out',
-  smooth: 'Smooth',
-  overshoot: 'Overshoot',
-}
-
-function KeyframeEasingControl({
-  targetLabel,
-  state,
-  onChange,
-  onCustomChange,
-}: {
-  targetLabel: string
-  state: AggregateEasing
-  onChange: (easing: NamedEasing) => void
-  onCustomChange: (ease: EaseHandle) => void
-}) {
-  const value = state.kind === 'named' ? state.name : state.kind
-  const handle = state.kind === 'named' || state.kind === 'custom' ? state.ease : null
-  const disabled = state.kind === 'none'
-  const [editorOpen, setEditorOpen] = useState(false)
-
-  return (
-    <div className="keyframe-context" role="group" aria-label={`${targetLabel} keyframe easing`}>
-      <EasingGlyph handle={handle} mixed={state.kind === 'mixed'} />
-      <div className="keyframe-context-copy">
-        <span>{targetLabel}</span>
-        <strong>{disabled ? 'End key' : 'To next key'}</strong>
-      </div>
-      <select
-        className="easing-select"
-        value={value}
-        disabled={disabled}
-        aria-label="Easing to next keyframe"
-        title={disabled ? 'The last keyframe has no outgoing animation' : 'Easing from this key to the next'}
-        onChange={(event) => {
-          setEditorOpen(false)
-          onChange(event.target.value as NamedEasing)
-        }}
-      >
-        {state.kind === 'none' && <option value="none">No outgoing segment</option>}
-        {state.kind === 'mixed' && <option value="mixed">Mixed curves</option>}
-        {state.kind === 'custom' && <option value="custom">Custom curve</option>}
-        {(Object.keys(NAMED_EASINGS) as NamedEasing[]).map((name) => (
-          <option key={name} value={name}>
-            {EASING_LABELS[name]}
-          </option>
-        ))}
-      </select>
-      <button
-        className="curve-editor-toggle"
-        disabled={disabled}
-        aria-label="Edit custom easing curve"
-        aria-expanded={editorOpen}
-        title="Edit custom cubic Bézier curve"
-        onClick={() => setEditorOpen((open) => !open)}
-      >
-        <SlidersHorizontal size={13} />
-      </button>
-      {editorOpen && (
-        <CurveEditor
-          initial={handle ?? EASE_SMOOTH}
-          onCancel={() => setEditorOpen(false)}
-          onApply={(ease) => {
-            onCustomChange(ease)
-            setEditorOpen(false)
-          }}
-        />
-      )}
-    </div>
-  )
-}
-
-function EasingGlyph({ handle, mixed = false }: { handle: EaseHandle | null; mixed?: boolean }) {
-  if (!handle || mixed) {
-    return (
-      <svg className="easing-glyph" viewBox="0 0 28 18" aria-hidden="true">
-        <path d={mixed ? 'M3 13 C8 13 8 5 13 5 M15 13 C20 13 20 5 25 5' : 'M3 9 H25'} />
-      </svg>
-    )
-  }
-  const [x1, y1, x2, y2] = handle
-  const path = `M3 15 C${3 + x1 * 22} ${15 - y1 * 12},${3 + x2 * 22} ${15 - y2 * 12},25 3`
-  return (
-    <svg className="easing-glyph" viewBox="0 0 28 18" aria-hidden="true">
-      <path d={path} />
-    </svg>
-  )
-}
-
-const CURVE_GRAPH = { left: 12, right: 188, top: 8, bottom: 92 } as const
-
-function curvePoint(x: number, y: number) {
-  const width = CURVE_GRAPH.right - CURVE_GRAPH.left
-  const height = CURVE_GRAPH.bottom - CURVE_GRAPH.top
-  return {
-    x: CURVE_GRAPH.left + x * width,
-    y: CURVE_GRAPH.bottom - ((y + 2) / 4) * height,
-  }
-}
-
-function CurveEditor({
-  initial,
-  onCancel,
-  onApply,
-}: {
-  initial: EaseHandle
-  onCancel: () => void
-  onApply: (ease: EaseHandle) => void
-}) {
-  const [draft, setDraft] = useState(() => normalizeEaseHandle(initial))
-  const start = curvePoint(0, 0)
-  const end = curvePoint(1, 1)
-  const first = curvePoint(draft[0], draft[1])
-  const second = curvePoint(draft[2], draft[3])
-
-  function updateHandle(index: 0 | 1, event: ReactPointerEvent<SVGCircleElement>) {
-    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return
-    const svg = event.currentTarget.ownerSVGElement
-    if (!svg) return
-    const rect = svg.getBoundingClientRect()
-    const px = ((event.clientX - rect.left) / rect.width) * 200
-    const py = ((event.clientY - rect.top) / rect.height) * 100
-    const x = (px - CURVE_GRAPH.left) / (CURVE_GRAPH.right - CURVE_GRAPH.left)
-    const y = ((CURVE_GRAPH.bottom - py) / (CURVE_GRAPH.bottom - CURVE_GRAPH.top)) * 4 - 2
-    setDraft((current) => {
-      const next = [...current] as EaseHandle
-      const offset = index * 2
-      next[offset] = x
-      next[offset + 1] = y
-      return normalizeEaseHandle(next)
-    })
-  }
-
-  function updatePart(index: number, value: number) {
-    if (!Number.isFinite(value)) return
-    setDraft((current) => {
-      const next = [...current] as EaseHandle
-      next[index] = value
-      return normalizeEaseHandle(next)
-    })
-  }
-
-  const path = `M${start.x} ${start.y} C${first.x} ${first.y},${second.x} ${second.y},${end.x} ${end.y}`
-
-  return (
-    <div className="curve-editor" role="dialog" aria-label="Custom cubic Bézier easing">
-      <div className="curve-editor-header">
-        <div>
-          <strong>Custom curve</strong>
-          <span>Drag handles or enter control points</span>
-        </div>
-        <button aria-label="Close curve editor" onClick={onCancel}>
-          <X size={13} />
-        </button>
-      </div>
-
-      <svg className="curve-graph" viewBox="0 0 200 100" aria-label="Easing curve preview">
-        <line className="curve-axis" x1={start.x} y1={start.y} x2={end.x} y2={start.y} />
-        <line className="curve-axis" x1={start.x} y1={start.y} x2={start.x} y2={end.y} />
-        <line className="curve-control" x1={start.x} y1={start.y} x2={first.x} y2={first.y} />
-        <line className="curve-control" x1={end.x} y1={end.y} x2={second.x} y2={second.y} />
-        <path className="curve-path" d={path} />
-        {[first, second].map((point, index) => (
-          <circle
-            key={index}
-            className="curve-handle"
-            cx={point.x}
-            cy={point.y}
-            r={5}
-            onPointerDown={(event) => {
-              event.preventDefault()
-              event.currentTarget.setPointerCapture(event.pointerId)
-            }}
-            onPointerMove={(event) => updateHandle(index as 0 | 1, event)}
-            onPointerUp={(event) => {
-              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                event.currentTarget.releasePointerCapture(event.pointerId)
-              }
-            }}
-            onPointerCancel={(event) => {
-              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                event.currentTarget.releasePointerCapture(event.pointerId)
-              }
-            }}
-          />
-        ))}
-      </svg>
-
-      <div className="curve-values">
-        {draft.map((value, index) => (
-          <label key={index}>
-            <span>{index % 2 === 0 ? `x${index / 2 + 1}` : `y${(index + 1) / 2}`}</span>
-            <input
-              type="number"
-              min={index % 2 === 0 ? 0 : -2}
-              max={index % 2 === 0 ? 1 : 2}
-              step={0.01}
-              value={Number(value.toFixed(2))}
-              onChange={(event) => updatePart(index, Number(event.target.value))}
-            />
-          </label>
-        ))}
-      </div>
-
-      <div className="curve-editor-actions">
-        <button onClick={() => setDraft([...EASE_SMOOTH] as EaseHandle)}>Reset</button>
-        <button className="primary" onClick={() => onApply(draft)}>Apply curve</button>
-      </div>
-    </div>
-  )
-}
-
-function TimecodeField({
-  time,
-  fps,
-  duration,
-  onCommit,
-}: {
-  time: number
-  fps: number
-  duration: number
-  onCommit: (time: number) => void
-}) {
-  const formatted = formatTimecode(time, fps)
-  const [draft, setDraft] = useState(formatted)
-  const [editing, setEditing] = useState(false)
-  const [invalid, setInvalid] = useState(false)
-  const cancelBlur = useRef(false)
-
-  function commit() {
-    const parsed = parseTimelineTime(draft, fps, duration)
-    if (parsed === null) {
-      setDraft(formatted)
-      setEditing(false)
-      setInvalid(true)
-      return
-    }
-    setInvalid(false)
-    setEditing(false)
-    onCommit(parsed)
-  }
-
-  function cancel() {
-    setDraft(formatted)
-    setInvalid(false)
-    setEditing(false)
-  }
-
-  return (
-    <input
-      className={invalid ? 'time-now invalid' : 'time-now'}
-      value={editing ? draft : formatted}
-      aria-label="Current time in minutes, seconds, and frames"
-      aria-invalid={invalid}
-      title="Current time · MM:SS:FF (you can also enter seconds)"
-      spellCheck={false}
-      onFocus={(event) => {
-        setEditing(true)
-        setDraft(formatted)
-        setInvalid(false)
-        event.currentTarget.select()
-      }}
-      onChange={(event) => {
-        setDraft(event.target.value)
-        setInvalid(false)
-      }}
-      onBlur={() => {
-        if (cancelBlur.current) {
-          cancelBlur.current = false
-          return
-        }
-        commit()
-      }}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter') {
-          event.preventDefault()
-          event.currentTarget.blur()
-        } else if (event.key === 'Escape') {
-          event.preventDefault()
-          cancelBlur.current = true
-          cancel()
-          event.currentTarget.blur()
-        }
-      }}
-    />
-  )
-}
-
-function TrackRow({
-  target,
-  label,
-  keys,
-  animated,
-  active,
-  selectedTime,
-  duration,
-  fps,
-  pct,
-  onScrub,
-  onSelect,
-  onMove,
-}: {
-  target: TrackTarget
-  label: string
-  keys: number[]
-  animated: boolean
-  active: boolean
-  selectedTime: number | null
-  duration: number
-  fps: number
-  pct: (t: number) => string
-  onScrub: (target: TrackTarget, clientX: number, laneLeft: number, laneWidth: number) => void
-  onSelect: (target: TrackTarget, time: number) => void
-  onMove: (target: TrackTarget, from: number, to: number) => void
-}) {
-  const drag = useRef<{
-    pointerId: number
-    sourceTime: number
-    originX: number
-    laneLeft: number
-    laneWidth: number
-    active: boolean
-  } | null>(null)
-  const suppressClick = useRef(false)
-  const [dragPreview, setDragPreview] = useState<{ sourceTime: number; time: number } | null>(null)
-
-  function finishDrag() {
-    drag.current = null
-    setDragPreview(null)
-  }
-
-  return (
-    <div className={active ? 'track-row active' : 'track-row'}>
-      <span className="track-label">{label}</span>
-      <div
-        className={animated ? 'track-lane animated' : 'track-lane'}
-        onPointerDown={(event) => {
-          const rect = event.currentTarget.getBoundingClientRect()
-          onScrub(target, event.clientX, rect.left, rect.width)
-        }}
-      >
-        {animated &&
-          keys.map((time) => {
-            const selected = selectedTime !== null && Math.abs(selectedTime - time) < 1e-6
-            const previewTime = dragPreview?.sourceTime === time ? dragPreview.time : time
-            return (
-              <button
-                key={time}
-                className={
-                  dragPreview?.sourceTime === time
-                    ? 'keyframe selected dragging'
-                    : selected
-                      ? 'keyframe selected'
-                      : 'keyframe'
-                }
-                style={{ left: pct(previewTime) }}
-                title={`${label} keyframe at ${time.toFixed(2)} seconds · drag to retime`}
-                aria-label={`${label} keyframe at ${time.toFixed(2)} seconds`}
-                aria-pressed={selected}
-                onPointerDown={(event) => {
-                  if (event.button !== 0) return
-                  event.stopPropagation()
-                  const rect = event.currentTarget.parentElement?.getBoundingClientRect()
-                  if (!rect) return
-                  onSelect(target, time)
-                  event.currentTarget.setPointerCapture(event.pointerId)
-                  drag.current = {
-                    pointerId: event.pointerId,
-                    sourceTime: time,
-                    originX: event.clientX,
-                    laneLeft: rect.left,
-                    laneWidth: rect.width,
-                    active: false,
-                  }
-                }}
-                onPointerMove={(event) => {
-                  const state = drag.current
-                  if (!state || state.pointerId !== event.pointerId) return
-                  if (!state.active && Math.abs(event.clientX - state.originX) < 3) return
-                  state.active = true
-                  const preview = timelineTimeAtPointer(
-                    event.clientX,
-                    state.laneLeft,
-                    state.laneWidth,
-                    duration,
-                    fps,
-                  )
-                  setDragPreview({ sourceTime: state.sourceTime, time: preview })
-                }}
-                onPointerUp={(event) => {
-                  const state = drag.current
-                  if (!state || state.pointerId !== event.pointerId) return
-                  if (state.active) {
-                    const destination = timelineTimeAtPointer(
-                      event.clientX,
-                      state.laneLeft,
-                      state.laneWidth,
-                      duration,
-                      fps,
-                    )
-                    suppressClick.current = true
-                    window.setTimeout(() => {
-                      suppressClick.current = false
-                    }, 0)
-                    onMove(target, state.sourceTime, destination)
-                  }
-                  finishDrag()
-                  if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                    event.currentTarget.releasePointerCapture(event.pointerId)
-                  }
-                }}
-                onPointerCancel={(event) => {
-                  const state = drag.current
-                  if (!state || state.pointerId !== event.pointerId) return
-                  suppressClick.current = false
-                  finishDrag()
-                  if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                    event.currentTarget.releasePointerCapture(event.pointerId)
-                  }
-                }}
-                onClick={() => {
-                  if (suppressClick.current) {
-                    suppressClick.current = false
-                    return
-                  }
-                  onSelect(target, time)
-                }}
-                onKeyDown={(event) => {
-                  const state = drag.current
-                  if (event.key !== 'Escape' || !state) return
-                  event.preventDefault()
-                  suppressClick.current = false
-                  finishDrag()
-                  if (event.currentTarget.hasPointerCapture(state.pointerId)) {
-                    event.currentTarget.releasePointerCapture(state.pointerId)
-                  }
-                  onSelect(target, state.sourceTime)
-                }}
-              />
-            )
-          })}
       </div>
     </div>
   )

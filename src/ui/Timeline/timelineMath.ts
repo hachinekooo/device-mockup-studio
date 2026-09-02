@@ -1,7 +1,10 @@
+import { alignDurationToFrames } from '../../timeline/time'
+
 /** Keep interactive timeline edits on exportable frame boundaries. */
 export function snapTimeToFrame(time: number, fps: number, duration: number): number {
-  const clamped = Math.min(duration, Math.max(0, time))
-  return Math.min(duration, Math.round(clamped * fps) / fps)
+  const boundary = alignDurationToFrames(duration, fps)
+  const clamped = Math.min(boundary, Math.max(0, time))
+  return Math.min(boundary, Math.round(clamped * fps) / fps)
 }
 
 /**

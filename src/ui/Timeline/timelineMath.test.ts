@@ -22,6 +22,11 @@ describe('timeline pointer geometry', () => {
     expect(timelineTimeAtPointer(800, 100, 600, 4, 30)).toBe(4)
     expect(snapTimeToFrame(1.019, 30, 4)).toBeCloseTo(1.033333, 6)
   })
+
+  it('treats a fractional clip duration as a frame-aligned end boundary', () => {
+    expect(snapTimeToFrame(1.05, 30, 1.05)).toBeCloseTo(32 / 30)
+    expect(snapTimeToFrame(1.01, 60, 1.01)).toBeCloseTo(61 / 60)
+  })
 })
 
 describe('timeline navigation', () => {

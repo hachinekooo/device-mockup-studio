@@ -169,3 +169,33 @@ export function keyTimes(tracks: TrackSet): number[] {
   }
   return [...seen].sort((a, b) => a - b)
 }
+
+/**
+ * Times represented by at least one genuinely animated channel. Single-key
+ * tracks are static values, so exposing their storage point as a deletable
+ * timeline diamond would offer an action that intentionally cannot succeed.
+ */
+export function editableKeyTimes(tracks: TrackSet): number[] {
+  const seen = new Set<number>()
+  for (const track of Object.values(tracks)) {
+    if (track.keys.length <= 1) continue
+    for (const key of track.keys) seen.add(Math.round(key.t * 1e6) / 1e6)
+  }
+  return [...seen].sort((a, b) => a - b)
+}
+
+/** Whether an aggregate timeline diamond exists at `t` in any scalar channel. */
+export function hasKeyAtTime(tracks: TrackSet, t: number): boolean {
+  return Object.values(tracks).some((track) =>
+    track.keys.some((key) => Math.abs(key.t - t) < EPSILON),
+  )
+}
+
+/** Whether a visible, removable aggregate timeline diamond exists at `t`. */
+export function hasEditableKeyAtTime(tracks: TrackSet, t: number): boolean {
+  return Object.values(tracks).some(
+    (track) =>
+      track.keys.length > 1 &&
+      track.keys.some((key) => Math.abs(key.t - t) < EPSILON),
+  )
+}

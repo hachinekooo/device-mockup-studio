@@ -7,6 +7,7 @@ import { deserializeProject, downloadProject, pruneUnreferencedMedia, serializeP
 import { applyCameraAngle, applyMotionPreset, type MotionPresetId } from '../timeline/presets'
 import { NAMED_EASINGS, normalizeEaseHandle, type NamedEasing } from '../timeline/easing'
 import { sampleTimeline, tracksEnd } from '../timeline/sample'
+import { alignDurationToFrames } from '../timeline/time'
 import {
   keyTimes,
   moveTrackValuesAt,
@@ -290,7 +291,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       tracksEnd(project.camera.tracks),
       ...project.devices.map((device) => tracksEnd(device.transform)),
     )
-    const duration = Math.max(0.1, contentEnd, seconds)
+    const duration = alignDurationToFrames(Math.max(0.1, seconds), project.fps, contentEnd)
     if (duration === project.duration) {
       set((state) => ({ playhead: Math.min(state.playhead, duration) }))
       return
@@ -301,7 +302,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   // Frame rate is a document property, not an export setting: it decides
   // which times the timeline is sampled at, so changing it changes the clip
   // rather than just the file.
-  setFps: (fps) => edit('fps', (p) => ({ ...p, fps })),
+  setFps: (fps) =>
+    edit('fps', (p) => {
+      const contentEnd = Math.max(
+        tracksEnd(p.camera.tracks),
+        ...p.devices.map((device) => tracksEnd(device.transform)),
+      )
+      return { ...p, fps, duration: alignDurationToFrames(p.duration, fps, contentEnd) }
+    }),
 
   setActiveDevice: (index) => set({ activeDevice: index }),
 
