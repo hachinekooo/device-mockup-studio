@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach } from 'vitest'
 import { useProjectStore } from './project'
 import { createDefaultProject, createDevice } from './defaults'
-import { resetCoalescing } from './history'
+import { emptyHistory, resetCoalescing } from './history'
 import { sampleTimeline } from '../timeline/sample'
 
 /**
@@ -14,6 +14,9 @@ function twoDeviceProject() {
     project: { ...project, devices: [createDevice(), createDevice({ id: 'pixel-9-pro-xl' })] },
     activeDevice: 0,
     playhead: 0,
+    editorMode: 'image',
+    motionPreset: 'none',
+    history: emptyHistory,
   })
 }
 
@@ -110,6 +113,64 @@ describe('device transform actions', () => {
     const track = store().project.devices[0].transform['position.x']
     expect(track.keys).toHaveLength(3)
     expect(track.keys.find((k) => k.t === 1)?.v).toBeCloseTo(0.75, 6)
+  })
+
+  it('edits a complete Movie pose when a preset originally keys only one axis', () => {
+    const store = () => useProjectStore.getState()
+    useProjectStore.setState({ editorMode: 'movie' })
+    store().setMotionPreset('slide-in-left')
+    useProjectStore.setState({ playhead: 0 })
+
+    store().setDevicePosition([0, -1.77, 0])
+
+    const transform = store().project.devices[0].transform
+    expect(Object.values(transform).every((track) => track.keys.length === 2)).toBe(true)
+    expect(transform['position.y'].keys.map((key) => [key.t, key.v])).toEqual([
+      [0, -1.77],
+      [2.2, 0],
+    ])
+    expect(sampleTimeline(store().project, 0).devices[0].position).toEqual([0, -1.77, 0])
+    expect(sampleTimeline(store().project, 2.2).devices[0].position).toEqual([0, 0, 0])
+  })
+
+  it('adds, edits, and deletes a complete device keyframe without a preset', () => {
+    const store = () => useProjectStore.getState()
+    store().addDeviceKeyframe(1)
+
+    const keyed = store().project.devices[0].transform
+    expect(Object.values(keyed).every((track) => track.keys.length === 2)).toBe(true)
+
+    useProjectStore.setState({ playhead: 1 })
+    store().setDevicePosition([0.75, 0.25, -0.1])
+    expect(store().project.devices[0].transform['position.x'].keys).toHaveLength(2)
+    expect(resolved(0).position).toEqual([0.75, 0.25, -0.1])
+
+    store().deleteDeviceKeyframe(1)
+    expect(Object.values(store().project.devices[0].transform).every((track) => track.keys.length === 1)).toBe(true)
+    expect(resolved(0).position).toEqual([0, 0, 0])
+  })
+
+  it('adds and deletes an exact camera keyframe', () => {
+    const store = () => useProjectStore.getState()
+    store().addCameraKeyframe(1.5)
+    expect(Object.values(store().project.camera.tracks).every((track) => track.keys.length === 2)).toBe(true)
+
+    store().deleteCameraKeyframe(1.5)
+    expect(Object.values(store().project.camera.tracks).every((track) => track.keys.length === 1)).toBe(true)
+  })
+
+  it('edits one Orbit camera pose without changing the same axis at every key', () => {
+    const store = () => useProjectStore.getState()
+    useProjectStore.setState({ editorMode: 'movie' })
+    store().setMotionPreset('orbit')
+    const start = sampleTimeline(store().project, 0).camera.position
+    useProjectStore.setState({ playhead: 0 })
+
+    store().setCameraPosition([start[0], -1, start[2]])
+
+    expect(Object.values(store().project.camera.tracks).every((track) => track.keys.length === 13)).toBe(true)
+    expect(sampleTimeline(store().project, 0).camera.position[1]).toBe(-1)
+    expect(sampleTimeline(store().project, store().project.duration).camera.position[1]).toBe(0.9)
   })
 
   it('is undoable', () => {

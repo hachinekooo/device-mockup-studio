@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { isAnimated, sampleTimeline, sampleTrack, tracksEnd } from './sample'
 import { EASE_LINEAR, EASE_SMOOTH } from './easing'
 import { deviceTracksForMotion } from './presets'
-import { keyTimes, setKey, setValueAt, staticTrack } from './tracks'
+import {
+  keyTimes,
+  removeTrackValuesAt,
+  setKey,
+  setTrackValuesAt,
+  setValueAt,
+  staticTrack,
+} from './tracks'
 import { createDefaultProject } from '../store/defaults'
 import type { Track } from '../store/schema'
 
@@ -177,5 +184,28 @@ describe('track editing', () => {
 
   it('collapses key times across channels into one column per time', () => {
     expect(keyTimes(deviceTracksForMotion('tilt-in', 4))).toEqual([0, 2.8])
+  })
+
+  it('writes a complete aggregate key without requiring a preset', () => {
+    const tracks = {
+      'position.x': staticTrack(0),
+      'position.y': staticTrack(1),
+    }
+    const keyed = setTrackValuesAt(tracks, 2, { 'position.x': 4, 'position.y': 5 })
+
+    expect(keyed['position.x'].keys.map((key) => [key.t, key.v])).toEqual([[0, 0], [2, 4]])
+    expect(keyed['position.y'].keys.map((key) => [key.t, key.v])).toEqual([[0, 1], [2, 5]])
+  })
+
+  it('deletes an aggregate key but preserves every channel\'s final value key', () => {
+    const tracks = {
+      'position.x': setKey(staticTrack(0), 2, 4),
+      'position.y': staticTrack(1),
+    }
+    const withoutEnd = removeTrackValuesAt(tracks, 2)
+
+    expect(withoutEnd['position.x'].keys).toHaveLength(1)
+    expect(withoutEnd['position.y']).toBe(tracks['position.y'])
+    expect(removeTrackValuesAt(withoutEnd, 0)).toBe(withoutEnd)
   })
 })

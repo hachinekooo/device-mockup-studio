@@ -5,7 +5,14 @@ import { emptyHistory, record, redo, resetCoalescing, undo, type History } from 
 import type { ExportQuality } from '../export/frameRenderer'
 import { deserializeProject, downloadProject, pruneUnreferencedMedia, serializeProject } from './persist'
 import { applyCameraAngle, applyMotionPreset, type MotionPresetId } from '../timeline/presets'
-import { setVec3At, setValueAt } from '../timeline/tracks'
+import { sampleTimeline } from '../timeline/sample'
+import {
+  keyTimes,
+  removeTrackValuesAt,
+  setTrackValuesAt,
+  setVec3At,
+  setValueAt,
+} from '../timeline/tracks'
 import { getManifest } from '../devices/manifest'
 import type {
   BackgroundConfig,
@@ -16,8 +23,65 @@ import type {
   MediaRef,
   Project,
   ScreenFit,
+  TrackSet,
   Vec3,
 } from './schema'
+
+const KEY_TIME_EPSILON = 1e-6
+
+function editTimes(tracks: TrackSet, time: number): number[] {
+  const times = keyTimes(tracks)
+  if (!times.some((candidate) => Math.abs(candidate - time) < KEY_TIME_EPSILON)) times.push(time)
+  return times.sort((a, b) => a - b)
+}
+
+/**
+ * The compact timeline renders one diamond per object time, not per scalar
+ * channel. Before editing one of those diamonds, materialise a complete pose
+ * at every visible time so changing Y at an X-driven preset key changes that
+ * frame rather than the static Y value for the whole clip.
+ */
+function completeDevicePoseKeys(project: Project, deviceIndex: number, time: number): TrackSet {
+  const device = project.devices[deviceIndex]
+  if (!device) return {}
+  const samples = editTimes(device.transform, time).map((sampleTime) => ({
+    time: sampleTime,
+    state: sampleTimeline(project, sampleTime).devices[deviceIndex],
+  }))
+  return samples.reduce(
+    (tracks, sample) =>
+      setTrackValuesAt(tracks, sample.time, {
+        'position.x': sample.state.position[0],
+        'position.y': sample.state.position[1],
+        'position.z': sample.state.position[2],
+        'rotation.x': sample.state.rotation[0],
+        'rotation.y': sample.state.rotation[1],
+        'rotation.z': sample.state.rotation[2],
+        scale: sample.state.scale,
+      }),
+    device.transform,
+  )
+}
+
+function completeCameraPoseKeys(project: Project, time: number): TrackSet {
+  const samples = editTimes(project.camera.tracks, time).map((sampleTime) => ({
+    time: sampleTime,
+    state: sampleTimeline(project, sampleTime).camera,
+  }))
+  return samples.reduce(
+    (tracks, sample) =>
+      setTrackValuesAt(tracks, sample.time, {
+        'position.x': sample.state.position[0],
+        'position.y': sample.state.position[1],
+        'position.z': sample.state.position[2],
+        'target.x': sample.state.target[0],
+        'target.y': sample.state.target[1],
+        'target.z': sample.state.target[2],
+        fov: sample.state.fov,
+      }),
+    project.camera.tracks,
+  )
+}
 
 type ProjectStore = {
   project: Project
@@ -77,6 +141,10 @@ type ProjectStore = {
   setDevicePosition: (v: Vec3) => void
   setDeviceScale: (v: number) => void
   setMotionPreset: (preset: MotionPresetId) => void
+  addCameraKeyframe: (t: number) => void
+  addDeviceKeyframe: (t: number) => void
+  deleteCameraKeyframe: (t: number) => void
+  deleteDeviceKeyframe: (t: number) => void
 }
 
 // Narrow selectors are used at call sites (§14 trap 10) — components should
@@ -100,6 +168,33 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       ...p,
       devices: p.devices.map((d, i) => (i === get().activeDevice ? update(d) : d)),
     }))
+
+  const editDeviceTracks = (label: string, update: (tracks: TrackSet) => TrackSet) => {
+    const { activeDevice, editorMode, playhead } = get()
+    edit(label, (p) => ({
+      ...p,
+      devices: p.devices.map((device, index) => {
+        if (index !== activeDevice) return device
+        const tracks =
+          editorMode === 'movie'
+            ? completeDevicePoseKeys(p, activeDevice, playhead)
+            : device.transform
+        return { ...device, transform: update(tracks) }
+      }),
+    }))
+  }
+
+  const editCameraTracks = (label: string, update: (tracks: TrackSet) => TrackSet) => {
+    const { editorMode, playhead } = get()
+    edit(label, (p) => {
+      const tracks =
+        editorMode === 'movie' ? completeCameraPoseKeys(p, playhead) : p.camera.tracks
+      return {
+        ...p,
+        camera: { ...p.camera, preset: null, tracks: update(tracks) },
+      }
+    })
+  }
 
   const replace = (project: Project) => {
     resetCoalescing()
@@ -225,40 +320,92 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   setCameraPreset: (preset) => edit('cameraPreset', (p) => applyCameraAngle(p, preset)),
   setCameraPosition: (v) =>
-    edit('cameraPosition', (p) => ({
-      ...p,
-      camera: {
-        ...p.camera,
-        preset: null, // a free move is no longer any named angle
-        tracks: setVec3At(p.camera.tracks, 'position', get().playhead, v),
-      },
-    })),
-  setCameraFov: (fov) =>
-    edit('fov', (p) => ({
-      ...p,
-      camera: {
-        ...p.camera,
-        fov,
-        tracks: { ...p.camera.tracks, fov: setValueAt(p.camera.tracks.fov, get().playhead, fov) },
-      },
-    })),
+    editCameraTracks('cameraPosition', (tracks) =>
+      setVec3At(tracks, 'position', get().playhead, v),
+    ),
+  setCameraFov: (fov) => {
+    const { editorMode, playhead } = get()
+    edit('fov', (p) => {
+      const tracks =
+        editorMode === 'movie' ? completeCameraPoseKeys(p, playhead) : p.camera.tracks
+      return {
+        ...p,
+        camera: {
+          ...p.camera,
+          fov,
+          preset: null,
+          tracks: { ...tracks, fov: setValueAt(tracks.fov, playhead, fov) },
+        },
+      }
+    })
+  },
   setDeviceRotation: (v) =>
-    editDevice('deviceRotation', (d) => ({
-      ...d,
-      transform: setVec3At(d.transform, 'rotation', get().playhead, v),
-    })),
+    editDeviceTracks('deviceRotation', (tracks) =>
+      setVec3At(tracks, 'rotation', get().playhead, v),
+    ),
   setDevicePosition: (v) =>
-    editDevice('devicePosition', (d) => ({
-      ...d,
-      transform: setVec3At(d.transform, 'position', get().playhead, v),
-    })),
+    editDeviceTracks('devicePosition', (tracks) =>
+      setVec3At(tracks, 'position', get().playhead, v),
+    ),
   // Uniform, like every other scale in the document — a non-uniform device is
   // a distorted device, which is never what a mockup wants.
   setDeviceScale: (v) =>
-    editDevice('deviceScale', (d) => ({
-      ...d,
-      transform: { ...d.transform, scale: setValueAt(d.transform.scale, get().playhead, v) },
+    editDeviceTracks('deviceScale', (tracks) => ({
+      ...tracks,
+      scale: setValueAt(tracks.scale, get().playhead, v),
     })),
+  addCameraKeyframe: (t) =>
+    edit('addCameraKeyframe', (p) => {
+      const time = Math.min(p.duration, Math.max(0, t))
+      return {
+        ...p,
+        camera: {
+          ...p.camera,
+          preset: null,
+          tracks: completeCameraPoseKeys(p, time),
+        },
+      }
+    }),
+  addDeviceKeyframe: (t) => {
+    const active = get().activeDevice
+    edit('addDeviceKeyframe', (p) => {
+      const time = Math.min(p.duration, Math.max(0, t))
+      if (!p.devices[active]) return p
+      return {
+        ...p,
+        devices: p.devices.map((device, index) =>
+          index === active
+            ? {
+                ...device,
+                transform: completeDevicePoseKeys(p, active, time),
+              }
+            : device,
+        ),
+      }
+    })
+  },
+  deleteCameraKeyframe: (t) => {
+    const tracks = get().project.camera.tracks
+    const next = removeTrackValuesAt(tracks, t)
+    if (next === tracks) return
+    edit('deleteCameraKeyframe', (p) => ({
+      ...p,
+      camera: { ...p.camera, preset: null, tracks: next },
+    }))
+  },
+  deleteDeviceKeyframe: (t) => {
+    const active = get().activeDevice
+    const tracks = get().project.devices[active]?.transform
+    if (!tracks) return
+    const next = removeTrackValuesAt(tracks, t)
+    if (next === tracks) return
+    edit('deleteDeviceKeyframe', (p) => ({
+      ...p,
+      devices: p.devices.map((device, index) =>
+        index === active ? { ...device, transform: next } : device,
+      ),
+    }))
+  },
   setMotionPreset: (preset) => {
     set({ motionPreset: preset })
     edit('motionPreset', (p) => applyMotionPreset(p, preset))
