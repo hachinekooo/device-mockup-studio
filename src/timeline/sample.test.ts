@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { isAnimated, sampleTimeline, sampleTrack, tracksEnd } from './sample'
-import { EASE_LINEAR, EASE_SMOOTH } from './easing'
+import {
+  aggregateEasingAt,
+  easingFor,
+  EASE_LINEAR,
+  EASE_OUT,
+  EASE_OVERSHOOT,
+  EASE_SMOOTH,
+  normalizeEaseHandle,
+} from './easing'
 import { deviceTracksForMotion } from './presets'
 import {
   keyTimes,
@@ -8,6 +16,7 @@ import {
   removeTrackValuesAt,
   setKey,
   setTrackValuesAt,
+  setTrackEasingAt,
   setValueAt,
   staticTrack,
 } from './tracks'
@@ -69,6 +78,12 @@ describe('sampleTrack', () => {
     // Endpoints must still land exactly, whatever the curve.
     expect(sampleTrack(eased, 0, 0)).toBe(0)
     expect(sampleTrack(eased, 1, 0)).toBe(100)
+  })
+
+  it('supports a bounded overshoot curve without changing the track model', () => {
+    expect(easingFor(EASE_OVERSHOOT)(0.7)).toBeGreaterThan(1)
+    expect(easingFor(EASE_OVERSHOOT)(1)).toBe(1)
+    expect(normalizeEaseHandle([2, 9, -1, Number.NaN])).toEqual([1, 2, 0, 1])
   })
 
   it('is monotonic across a monotonic track', () => {
@@ -199,6 +214,34 @@ describe('track editing', () => {
       { t: 2, v: 3, ease: EASE_SMOOTH },
       { t: 3, v: 9, ease: EASE_LINEAR },
     ])
+  })
+
+  it('summarises and updates aggregate outgoing easing without touching end keys', () => {
+    const tracks = {
+      x: { keys: [
+        { t: 0, v: 0, ease: EASE_LINEAR },
+        { t: 2, v: 2, ease: EASE_SMOOTH },
+      ] },
+      y: { keys: [
+        { t: 0, v: 1, ease: EASE_SMOOTH },
+        { t: 1, v: 3, ease: EASE_LINEAR },
+      ] },
+      z: { keys: [{ t: 0, v: 4, ease: EASE_LINEAR }] },
+    }
+
+    expect(aggregateEasingAt(tracks, 0)).toEqual({ kind: 'mixed' })
+    const eased = setTrackEasingAt(tracks, 0, EASE_OUT)
+    expect(aggregateEasingAt(eased, 0)).toEqual({ kind: 'named', name: 'ease-out', ease: EASE_OUT })
+    expect(eased.x.keys[0].ease).toEqual(EASE_OUT)
+    expect(eased.y.keys[0].ease).toEqual(EASE_OUT)
+    expect(eased.z).toBe(tracks.z)
+    expect(setTrackEasingAt(eased, 2, EASE_LINEAR)).toBe(eased)
+
+    const custom = setTrackEasingAt(eased, 0, [0.2, -0.4, 0.8, 1.4])
+    expect(aggregateEasingAt(custom, 0)).toEqual({
+      kind: 'custom',
+      ease: [0.2, -0.4, 0.8, 1.4],
+    })
   })
 
   it('editing a static channel does not accidentally create animation', () => {

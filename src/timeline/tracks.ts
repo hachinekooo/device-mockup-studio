@@ -112,6 +112,30 @@ export function moveTrackValuesAt(tracks: TrackSet, from: number, to: number): T
   return changed ? next : tracks
 }
 
+/** Apply easing only where a key at `t` actually has an outgoing segment. */
+export function setTrackEasingAt(tracks: TrackSet, t: number, ease: EaseHandle): TrackSet {
+  let changed = false
+  const next: TrackSet = {}
+
+  for (const [channel, track] of Object.entries(tracks)) {
+    const index = track.keys.findIndex((key) => Math.abs(key.t - t) < EPSILON)
+    if (index < 0 || index >= track.keys.length - 1) {
+      next[channel] = track
+      continue
+    }
+    if (track.keys[index].ease.every((value, part) => Math.abs(value - ease[part]) < EPSILON)) {
+      next[channel] = track
+      continue
+    }
+    const keys = track.keys.slice()
+    keys[index] = { ...keys[index], ease: [...ease] as EaseHandle }
+    next[channel] = { keys }
+    changed = true
+  }
+
+  return changed ? next : tracks
+}
+
 /**
  * Set a channel's value at `t`. On a static (single-key) channel this edits
  * that key in place rather than adding a second one, so scrubbing the

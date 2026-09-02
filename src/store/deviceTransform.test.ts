@@ -4,6 +4,7 @@ import { createDefaultProject, createDevice } from './defaults'
 import { emptyHistory, resetCoalescing } from './history'
 import { sampleTimeline } from '../timeline/sample'
 import { keyTimes } from '../timeline/tracks'
+import { aggregateEasingAt } from '../timeline/easing'
 
 /**
  * Per-device transform editing — what turns the eleven templates from a fixed
@@ -213,6 +214,43 @@ describe('device transform actions', () => {
     store().undo()
     expect(keyTimes(store().project.devices[0].transform)).toContain(1)
     expect(keyTimes(store().project.devices[0].transform)).not.toContain(1.5)
+  })
+
+  it('changes outgoing easing on the active device and is undoable', () => {
+    const store = () => useProjectStore.getState()
+    useProjectStore.setState({ editorMode: 'movie' })
+    store().setMotionPreset('slide-in-left')
+    const untouched = store().project.devices[1]
+    useProjectStore.setState({ history: emptyHistory })
+
+    store().setDeviceKeyframeEasing(0, 'ease-in')
+
+    expect(aggregateEasingAt(store().project.devices[0].transform, 0)).toMatchObject({
+      kind: 'named',
+      name: 'ease-in',
+    })
+    expect(store().project.devices[1]).toBe(untouched)
+
+    store().undo()
+    expect(aggregateEasingAt(store().project.devices[0].transform, 0)).not.toMatchObject({
+      kind: 'named',
+      name: 'ease-in',
+    })
+  })
+
+  it('normalizes and stores one custom curve as a discrete edit', () => {
+    const store = () => useProjectStore.getState()
+    useProjectStore.setState({ editorMode: 'movie' })
+    store().setMotionPreset('slide-in-left')
+    useProjectStore.setState({ history: emptyHistory })
+
+    store().setDeviceKeyframeEase(0, [1.4, 3, -0.2, -3])
+
+    expect(aggregateEasingAt(store().project.devices[0].transform, 0)).toEqual({
+      kind: 'custom',
+      ease: [1, 2, 0, -2],
+    })
+    expect(store().history.past).toHaveLength(1)
   })
 
   it('edits one Orbit camera pose without changing the same axis at every key', () => {

@@ -5,12 +5,14 @@ import { emptyHistory, record, redo, resetCoalescing, undo, type History } from 
 import type { ExportQuality } from '../export/frameRenderer'
 import { deserializeProject, downloadProject, pruneUnreferencedMedia, serializeProject } from './persist'
 import { applyCameraAngle, applyMotionPreset, type MotionPresetId } from '../timeline/presets'
+import { NAMED_EASINGS, normalizeEaseHandle, type NamedEasing } from '../timeline/easing'
 import { sampleTimeline, tracksEnd } from '../timeline/sample'
 import {
   keyTimes,
   moveTrackValuesAt,
   removeTrackValuesAt,
   setTrackValuesAt,
+  setTrackEasingAt,
   setVec3At,
   setValueAt,
 } from '../timeline/tracks'
@@ -21,6 +23,7 @@ import type {
   DeviceId,
   DeviceInstance,
   DeviceOrientation,
+  EaseHandle,
   MediaRef,
   Project,
   ScreenFit,
@@ -148,6 +151,10 @@ type ProjectStore = {
   deleteDeviceKeyframe: (t: number) => void
   moveCameraKeyframe: (from: number, to: number) => void
   moveDeviceKeyframe: (from: number, to: number) => void
+  setCameraKeyframeEasing: (t: number, easing: NamedEasing) => void
+  setDeviceKeyframeEasing: (t: number, easing: NamedEasing) => void
+  setCameraKeyframeEase: (t: number, ease: EaseHandle) => void
+  setDeviceKeyframeEase: (t: number, ease: EaseHandle) => void
 }
 
 // Narrow selectors are used at call sites (§14 trap 10) — components should
@@ -197,6 +204,32 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         camera: { ...p.camera, preset: null, tracks: update(tracks) },
       }
     })
+  }
+
+  const setCameraKeyframeEase = (t: number, handle: EaseHandle) => {
+    const ease = normalizeEaseHandle(handle)
+    const tracks = get().project.camera.tracks
+    const next = setTrackEasingAt(tracks, t, ease)
+    if (next === tracks) return
+    edit(undefined, (p) => ({
+      ...p,
+      camera: { ...p.camera, tracks: setTrackEasingAt(p.camera.tracks, t, ease) },
+    }))
+  }
+
+  const setDeviceKeyframeEase = (t: number, handle: EaseHandle) => {
+    const ease = normalizeEaseHandle(handle)
+    const active = get().activeDevice
+    const tracks = get().project.devices[active]?.transform
+    if (!tracks) return
+    const next = setTrackEasingAt(tracks, t, ease)
+    if (next === tracks) return
+    edit(undefined, (p) => ({
+      ...p,
+      devices: p.devices.map((device, index) =>
+        index === active ? { ...device, transform: setTrackEasingAt(device.transform, t, ease) } : device,
+      ),
+    }))
   }
 
   const replace = (project: Project) => {
@@ -449,6 +482,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       ),
     }))
   },
+  setCameraKeyframeEasing: (t, easing) => setCameraKeyframeEase(t, NAMED_EASINGS[easing]),
+  setDeviceKeyframeEasing: (t, easing) => setDeviceKeyframeEase(t, NAMED_EASINGS[easing]),
+  setCameraKeyframeEase,
+  setDeviceKeyframeEase,
   setMotionPreset: (preset) => {
     set({ motionPreset: preset })
     edit('motionPreset', (p) => applyMotionPreset(p, preset))
