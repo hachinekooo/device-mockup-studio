@@ -3,6 +3,7 @@ import { useProjectStore } from './project'
 import { createDefaultProject, createDevice } from './defaults'
 import { emptyHistory, resetCoalescing } from './history'
 import { sampleTimeline } from '../timeline/sample'
+import { keyTimes } from '../timeline/tracks'
 
 /**
  * Per-device transform editing — what turns the eleven templates from a fixed
@@ -157,6 +158,61 @@ describe('device transform actions', () => {
 
     store().deleteCameraKeyframe(1.5)
     expect(Object.values(store().project.camera.tracks).every((track) => track.keys.length === 1)).toBe(true)
+  })
+
+  it('keeps the playhead inside the visible timeline', () => {
+    const store = () => useProjectStore.getState()
+    store().setPlayhead(99)
+    expect(store().playhead).toBe(store().project.duration)
+
+    store().setPlayhead(3)
+    store().setDuration(2)
+    expect(store().project.duration).toBe(2)
+    expect(store().playhead).toBe(2)
+  })
+
+  it('does not hide existing keyframes when duration is shortened', () => {
+    const store = () => useProjectStore.getState()
+    store().addDeviceKeyframe(3)
+    store().setDuration(2)
+
+    expect(store().project.duration).toBe(3)
+    expect(store().project.devices[0].transform['position.x'].keys.at(-1)?.t).toBe(3)
+
+    useProjectStore.setState({ history: emptyHistory })
+    store().setDuration(2)
+    expect(store().history.past).toHaveLength(0)
+  })
+
+  it('retimes only the active device instance', () => {
+    const store = () => useProjectStore.getState()
+    useProjectStore.setState({ editorMode: 'movie' })
+    store().setMotionPreset('slide-in-left')
+    const untouched = store().project.devices[1]
+
+    store().moveDeviceKeyframe(0, 1)
+
+    expect(keyTimes(store().project.devices[0].transform)).toContain(1)
+    expect(store().project.devices[1]).toBe(untouched)
+  })
+
+  it('keeps quick retiming gestures as separate undo steps', () => {
+    const store = () => useProjectStore.getState()
+    store().addDeviceKeyframe(1)
+    store().addDeviceKeyframe(2)
+    useProjectStore.setState({ history: emptyHistory })
+
+    store().moveDeviceKeyframe(1, 1.5)
+    store().moveDeviceKeyframe(2, 2.5)
+    expect(keyTimes(store().project.devices[0].transform)).toContain(2.5)
+
+    store().undo()
+    expect(keyTimes(store().project.devices[0].transform)).toContain(2)
+    expect(keyTimes(store().project.devices[0].transform)).toContain(1.5)
+
+    store().undo()
+    expect(keyTimes(store().project.devices[0].transform)).toContain(1)
+    expect(keyTimes(store().project.devices[0].transform)).not.toContain(1.5)
   })
 
   it('edits one Orbit camera pose without changing the same axis at every key', () => {

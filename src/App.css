@@ -276,6 +276,10 @@
   min-height: 0;
 }
 
+.timeline:focus {
+  outline: none;
+}
+
 .timeline-toolbar {
   display: flex;
   align-items: center;
@@ -300,6 +304,48 @@
 
 .play-btn:hover {
   background: var(--chrome-2);
+}
+
+.transport-nav {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.transport-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 25px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-right: 1px solid var(--line-soft);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.transport-btn:last-child {
+  border-right: 0;
+}
+
+.transport-btn:hover:not(:disabled) {
+  background: var(--chrome-2);
+  color: var(--text);
+}
+
+.transport-btn:focus-visible {
+  position: relative;
+  outline: 2px solid var(--blue);
+  outline-offset: -2px;
+}
+
+.transport-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
 }
 
 .add-animation {
@@ -380,13 +426,24 @@
 }
 
 .time-now {
+  width: 82px;
   background: var(--chrome-2);
   border: 1px solid var(--line);
   border-radius: 5px;
   padding: 4px 9px;
   color: var(--text);
-  min-width: 62px;
   text-align: center;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.time-now:focus {
+  outline: none;
+  border-color: var(--blue);
+}
+
+.time-now.invalid {
+  border-color: var(--accent);
 }
 
 .time-duration {
@@ -470,8 +527,12 @@
   padding: 0;
   border: 0;
   background: transparent;
-  cursor: pointer;
+  cursor: ew-resize;
   z-index: 2;
+}
+
+.keyframe.dragging {
+  z-index: 4;
 }
 
 .keyframe::before {
@@ -510,7 +571,7 @@
   pointer-events: none;
 }
 
-.playhead {
+.playhead-line {
   position: absolute;
   top: 0;
   bottom: 0;
@@ -518,15 +579,40 @@
   background: var(--accent);
 }
 
+.playhead-handle {
+  position: absolute;
+  top: -12px;
+  left: -12px;
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: ew-resize;
+  pointer-events: auto;
+  touch-action: none;
+  z-index: 3;
+}
+
+.playhead-handle:focus-visible {
+  outline: none;
+}
+
 .playhead-grip {
   position: absolute;
-  top: -4px;
+  top: 8px;
   left: 50%;
   transform: translateX(-50%);
   width: 9px;
   height: 9px;
   border-radius: 2px;
   background: var(--accent);
+}
+
+.playhead-handle:focus-visible .playhead-grip {
+  box-shadow: 0 0 0 2px rgba(240, 86, 45, 0.35);
 }
 
 /* ------------------------------------------------------------ inspector */

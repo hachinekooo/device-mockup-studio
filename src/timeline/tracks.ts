@@ -82,6 +82,37 @@ export function removeTrackValuesAt(tracks: TrackSet, t: number): TrackSet {
 }
 
 /**
+ * Move only the scalar keys that actually exist at `from`.
+ *
+ * Aggregate diamonds are the union of several scalar tracks, so retiming one
+ * must not materialise unrelated channels. If a moved channel already has a
+ * key at `to`, the moved key wins atomically; channels without a source key
+ * remain byte-for-byte unchanged.
+ */
+export function moveTrackValuesAt(tracks: TrackSet, from: number, to: number): TrackSet {
+  if (Math.abs(from - to) < EPSILON) return tracks
+  let changed = false
+  const next: TrackSet = {}
+
+  for (const [channel, track] of Object.entries(tracks)) {
+    const source = track.keys.find((key) => Math.abs(key.t - from) < EPSILON)
+    if (!source) {
+      next[channel] = track
+      continue
+    }
+
+    const keys = track.keys
+      .filter((key) => Math.abs(key.t - from) >= EPSILON && Math.abs(key.t - to) >= EPSILON)
+      .concat({ ...source, t: to })
+      .sort((a, b) => a.t - b.t)
+    next[channel] = { keys }
+    changed = true
+  }
+
+  return changed ? next : tracks
+}
+
+/**
  * Set a channel's value at `t`. On a static (single-key) channel this edits
  * that key in place rather than adding a second one, so scrubbing the
  * timeline and typing in a number can't accidentally create animation.

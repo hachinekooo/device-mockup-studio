@@ -1,10 +1,25 @@
-import { useCallback, useEffect, useState } from 'react'
-import { Play, Pause, Plus, Trash2 } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  ChevronLeft,
+  ChevronRight,
+  Play,
+  Pause,
+  Plus,
+  SkipBack,
+  SkipForward,
+  Trash2,
+} from 'lucide-react'
 import { useProjectStore } from '../../store/project'
 import { MOTION_PRESETS, type MotionPresetId } from '../../timeline/presets'
 import { keyTimes } from '../../timeline/tracks'
-import { isAnimated } from '../../timeline/sample'
-import { snapTimeToFrame, timelineTimeAtPointer } from './timelineMath'
+import { isAnimated, tracksEnd } from '../../timeline/sample'
+import {
+  adjacentKeyTime,
+  formatTimecode,
+  parseTimelineTime,
+  snapTimeToFrame,
+  timelineTimeAtPointer,
+} from './timelineMath'
 
 type TrackTarget = 'camera' | 'device'
 type KeySelection = { target: TrackTarget; time: number; deviceInstanceId?: string }
@@ -27,8 +42,11 @@ export function TimelineBar() {
   const addDeviceKeyframe = useProjectStore((s) => s.addDeviceKeyframe)
   const deleteCameraKeyframe = useProjectStore((s) => s.deleteCameraKeyframe)
   const deleteDeviceKeyframe = useProjectStore((s) => s.deleteDeviceKeyframe)
+  const moveCameraKeyframe = useProjectStore((s) => s.moveCameraKeyframe)
+  const moveDeviceKeyframe = useProjectStore((s) => s.moveDeviceKeyframe)
   const [activeTrack, setActiveTrack] = useState<TrackTarget>('device')
   const [selection, setSelection] = useState<KeySelection | null>(null)
+  const timelineRef = useRef<HTMLDivElement>(null)
 
   const duration = project.duration
   const pct = (t: number) => `${(t / duration) * 100}%`
@@ -39,6 +57,7 @@ export function TimelineBar() {
     setActiveTrack(target)
     setSelection(null)
     setPlayhead(time)
+    timelineRef.current?.focus({ preventScroll: true })
   }
 
   const cameraKeys = keyTimes(project.camera.tracks)
@@ -48,6 +67,9 @@ export function TimelineBar() {
   const deviceKeys = keyTimes(deviceTracks)
   const cameraAnimated = isAnimated(project.camera.tracks)
   const deviceAnimated = isAnimated(deviceTracks)
+  const activeKeys = activeTrack === 'camera' ? cameraKeys : deviceKeys
+  const previousKey = adjacentKeyTime(activeKeys, playhead, -1)
+  const nextKey = adjacentKeyTime(activeKeys, playhead, 1)
   const currentSelection =
     selection?.target === 'device' && selection.deviceInstanceId !== activeDeviceInstanceId
       ? null
@@ -78,6 +100,24 @@ export function TimelineBar() {
     })
   }
 
+  function moveKeyframe(target: TrackTarget, from: number, to: number) {
+    const time = snapTimeToFrame(to, project.fps, duration)
+    if (Math.abs(from - time) < 1e-6) return
+    setPlaying(false)
+    if (target === 'camera') moveCameraKeyframe(from, time)
+    else moveDeviceKeyframe(from, time)
+    setPlayhead(time)
+    setActiveTrack(target)
+    setSelection({
+      target,
+      time,
+      deviceInstanceId: target === 'device' ? activeDeviceInstanceId : undefined,
+    })
+    requestAnimationFrame(() => {
+      timelineRef.current?.querySelector<HTMLButtonElement>('.keyframe.selected')?.focus()
+    })
+  }
+
   const deleteSelected = useCallback(() => {
     if (!currentSelection) return
     if (currentSelection.target === 'camera') deleteCameraKeyframe(currentSelection.time)
@@ -85,28 +125,103 @@ export function TimelineBar() {
     setSelection(null)
   }, [currentSelection, deleteCameraKeyframe, deleteDeviceKeyframe])
 
+  const seekTo = useCallback(
+    (time: number) => {
+      setPlaying(false)
+      setSelection(null)
+      setPlayhead(snapTimeToFrame(time, project.fps, duration))
+    },
+    [duration, project.fps, setPlayhead, setPlaying],
+  )
+
+  const stepFrames = useCallback(
+    (frames: number) => seekTo(playhead + frames / project.fps),
+    [playhead, project.fps, seekTo],
+  )
+
   useEffect(() => {
-    if (!currentSelection) return
     function onKeyDown(event: KeyboardEvent) {
       const target = event.target as HTMLElement | null
       if (target?.closest('input, textarea, select, [contenteditable="true"]')) return
-      if (event.key !== 'Delete' && event.key !== 'Backspace') return
-      event.preventDefault()
-      deleteSelected()
+      if (!timelineRef.current?.contains(document.activeElement)) return
+      if ((event.key === 'Delete' || event.key === 'Backspace') && currentSelection) {
+        event.preventDefault()
+        deleteSelected()
+        return
+      }
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+        event.preventDefault()
+        const direction = event.key === 'ArrowLeft' ? -1 : 1
+        stepFrames(direction * (event.shiftKey ? 10 : 1))
+        return
+      }
+      if (event.key === 'Home' || event.key === 'End') {
+        event.preventDefault()
+        seekTo(event.key === 'Home' ? 0 : duration)
+        return
+      }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [currentSelection, deleteSelected])
+  }, [currentSelection, deleteSelected, duration, seekTo, stepFrames])
+
+  useEffect(() => {
+    function clearSelectionOutsideTimeline(event: PointerEvent) {
+      if (timelineRef.current?.contains(event.target as Node)) return
+      setSelection(null)
+    }
+    window.addEventListener('pointerdown', clearSelectionOutsideTimeline, true)
+    return () => window.removeEventListener('pointerdown', clearSelectionOutsideTimeline, true)
+  }, [])
 
   // One tick per second, plus a half-second subdivision for readability.
   const seconds = Math.ceil(duration)
 
   return (
-    <div className="timeline">
+    <div className="timeline" ref={timelineRef} tabIndex={-1}>
       <div className="timeline-toolbar">
         <button className="play-btn" onClick={() => setPlaying(!playing)} title={playing ? 'Pause' : 'Play'}>
           {playing ? <Pause size={16} /> : <Play size={16} />}
         </button>
+
+        <div className="transport-nav" role="group" aria-label="Timeline navigation">
+          <button
+            className="transport-btn"
+            onClick={() => previousKey !== null && seekTo(previousKey)}
+            disabled={previousKey === null}
+            title={`Previous ${activeTrack} keyframe`}
+            aria-label={`Previous ${activeTrack} keyframe`}
+          >
+            <SkipBack size={13} />
+          </button>
+          <button
+            className="transport-btn"
+            onClick={() => stepFrames(-1)}
+            disabled={playhead <= 0}
+            title="Previous frame (Left Arrow)"
+            aria-label="Previous frame"
+          >
+            <ChevronLeft size={14} />
+          </button>
+          <button
+            className="transport-btn"
+            onClick={() => stepFrames(1)}
+            disabled={playhead >= duration}
+            title="Next frame (Right Arrow)"
+            aria-label="Next frame"
+          >
+            <ChevronRight size={14} />
+          </button>
+          <button
+            className="transport-btn"
+            onClick={() => nextKey !== null && seekTo(nextKey)}
+            disabled={nextKey === null}
+            title={`Next ${activeTrack} keyframe`}
+            aria-label={`Next ${activeTrack} keyframe`}
+          >
+            <SkipForward size={13} />
+          </button>
+        </div>
 
         <label className="add-animation">
           <Plus size={14} />
@@ -125,7 +240,7 @@ export function TimelineBar() {
           </select>
         </label>
 
-        <div className="keyframe-actions" aria-label="Keyframe actions">
+        <div className="keyframe-actions" role="group" aria-label="Keyframe actions">
           <button
             className="timeline-action"
             onClick={addKeyframe}
@@ -150,15 +265,25 @@ export function TimelineBar() {
         </div>
 
         <div className="time-readout">
-          <span className="time-now">{playhead.toFixed(2)}s</span>
+          <TimecodeField
+            time={playhead}
+            fps={project.fps}
+            duration={duration}
+            onCommit={seekTo}
+          />
           <span className="time-of">of</span>
           <input
             className="time-duration"
             type="number"
-            min={0.5}
+            min={Math.max(
+              0.5,
+              tracksEnd(project.camera.tracks),
+              ...project.devices.map((device) => tracksEnd(device.transform)),
+            )}
             step={0.5}
             value={duration}
             onChange={(e) => setDuration(Number(e.target.value))}
+            title="Duration cannot be shorter than the last keyframe"
           />
           <span className="time-of">s</span>
         </div>
@@ -181,29 +306,145 @@ export function TimelineBar() {
             animated={cameraAnimated}
             active={activeTrack === 'camera'}
             selectedTime={currentSelection?.target === 'camera' ? currentSelection.time : null}
+            duration={duration}
+            fps={project.fps}
             pct={pct}
             onScrub={scrubTo}
             onSelect={selectKeyframe}
+            onMove={moveKeyframe}
           />
           <TrackRow
             target="device"
-            label="Device"
+            label={project.devices.length > 1 ? `Device ${active + 1}` : 'Device'}
             keys={deviceKeys}
             animated={deviceAnimated}
             active={activeTrack === 'device'}
             selectedTime={currentSelection?.target === 'device' ? currentSelection.time : null}
+            duration={duration}
+            fps={project.fps}
             pct={pct}
             onScrub={scrubTo}
             onSelect={selectKeyframe}
+            onMove={moveKeyframe}
           />
           <div className="playhead-layer">
-            <div className="playhead" style={{ left: pct(playhead) }}>
-              <span className="playhead-grip" />
+            <div className="playhead-line" style={{ left: pct(playhead) }}>
+              <button
+                className="playhead-handle"
+                title={`Drag playhead · ${formatTimecode(playhead, project.fps)}`}
+                aria-label={`Playhead at ${formatTimecode(playhead, project.fps)}`}
+                role="slider"
+                aria-valuemin={0}
+                aria-valuemax={duration}
+                aria-valuenow={playhead}
+                aria-valuetext={formatTimecode(playhead, project.fps)}
+                onPointerDown={(event) => {
+                  event.preventDefault()
+                  event.currentTarget.focus({ preventScroll: true })
+                  event.currentTarget.setPointerCapture(event.pointerId)
+                  const rect = event.currentTarget.closest('.playhead-layer')?.getBoundingClientRect()
+                  if (rect) seekTo(timelineTimeAtPointer(event.clientX, rect.left, rect.width, duration, project.fps))
+                }}
+                onPointerMove={(event) => {
+                  if (!event.currentTarget.hasPointerCapture(event.pointerId)) return
+                  const rect = event.currentTarget.closest('.playhead-layer')?.getBoundingClientRect()
+                  if (rect) seekTo(timelineTimeAtPointer(event.clientX, rect.left, rect.width, duration, project.fps))
+                }}
+                onPointerUp={(event) => {
+                  if (!event.currentTarget.hasPointerCapture(event.pointerId)) return
+                  const rect = event.currentTarget.closest('.playhead-layer')?.getBoundingClientRect()
+                  if (rect) seekTo(timelineTimeAtPointer(event.clientX, rect.left, rect.width, duration, project.fps))
+                  event.currentTarget.releasePointerCapture(event.pointerId)
+                }}
+                onPointerCancel={(event) => {
+                  if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                    event.currentTarget.releasePointerCapture(event.pointerId)
+                  }
+                }}
+              >
+                <span className="playhead-grip" />
+              </button>
             </div>
           </div>
         </div>
       </div>
     </div>
+  )
+}
+
+function TimecodeField({
+  time,
+  fps,
+  duration,
+  onCommit,
+}: {
+  time: number
+  fps: number
+  duration: number
+  onCommit: (time: number) => void
+}) {
+  const formatted = formatTimecode(time, fps)
+  const [draft, setDraft] = useState(formatted)
+  const [editing, setEditing] = useState(false)
+  const [invalid, setInvalid] = useState(false)
+  const cancelBlur = useRef(false)
+
+  function commit() {
+    const parsed = parseTimelineTime(draft, fps, duration)
+    if (parsed === null) {
+      setDraft(formatted)
+      setEditing(false)
+      setInvalid(true)
+      return
+    }
+    setInvalid(false)
+    setEditing(false)
+    onCommit(parsed)
+  }
+
+  function cancel() {
+    setDraft(formatted)
+    setInvalid(false)
+    setEditing(false)
+  }
+
+  return (
+    <input
+      className={invalid ? 'time-now invalid' : 'time-now'}
+      value={editing ? draft : formatted}
+      aria-label="Current time in minutes, seconds, and frames"
+      aria-invalid={invalid}
+      title="Current time · MM:SS:FF (you can also enter seconds)"
+      spellCheck={false}
+      onFocus={(event) => {
+        setEditing(true)
+        setDraft(formatted)
+        setInvalid(false)
+        event.currentTarget.select()
+      }}
+      onChange={(event) => {
+        setDraft(event.target.value)
+        setInvalid(false)
+      }}
+      onBlur={() => {
+        if (cancelBlur.current) {
+          cancelBlur.current = false
+          return
+        }
+        commit()
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault()
+          event.currentTarget.blur()
+        } else if (event.key === 'Escape') {
+          event.preventDefault()
+          cancelBlur.current = true
+          cancel()
+          event.currentTarget.blur()
+        }
+      }}
+    />
   )
 }
 
@@ -214,9 +455,12 @@ function TrackRow({
   animated,
   active,
   selectedTime,
+  duration,
+  fps,
   pct,
   onScrub,
   onSelect,
+  onMove,
 }: {
   target: TrackTarget
   label: string
@@ -224,10 +468,29 @@ function TrackRow({
   animated: boolean
   active: boolean
   selectedTime: number | null
+  duration: number
+  fps: number
   pct: (t: number) => string
   onScrub: (target: TrackTarget, clientX: number, laneLeft: number, laneWidth: number) => void
   onSelect: (target: TrackTarget, time: number) => void
+  onMove: (target: TrackTarget, from: number, to: number) => void
 }) {
+  const drag = useRef<{
+    pointerId: number
+    sourceTime: number
+    originX: number
+    laneLeft: number
+    laneWidth: number
+    active: boolean
+  } | null>(null)
+  const suppressClick = useRef(false)
+  const [dragPreview, setDragPreview] = useState<{ sourceTime: number; time: number } | null>(null)
+
+  function finishDrag() {
+    drag.current = null
+    setDragPreview(null)
+  }
+
   return (
     <div className={active ? 'track-row active' : 'track-row'}>
       <span className="track-label">{label}</span>
@@ -241,17 +504,99 @@ function TrackRow({
         {animated &&
           keys.map((time) => {
             const selected = selectedTime !== null && Math.abs(selectedTime - time) < 1e-6
+            const previewTime = dragPreview?.sourceTime === time ? dragPreview.time : time
             return (
               <button
                 key={time}
-                className={selected ? 'keyframe selected' : 'keyframe'}
-                style={{ left: pct(time) }}
-                title={`${label} keyframe at ${time.toFixed(2)} seconds`}
+                className={
+                  dragPreview?.sourceTime === time
+                    ? 'keyframe selected dragging'
+                    : selected
+                      ? 'keyframe selected'
+                      : 'keyframe'
+                }
+                style={{ left: pct(previewTime) }}
+                title={`${label} keyframe at ${time.toFixed(2)} seconds · drag to retime`}
                 aria-label={`${label} keyframe at ${time.toFixed(2)} seconds`}
                 aria-pressed={selected}
                 onPointerDown={(event) => {
+                  if (event.button !== 0) return
                   event.stopPropagation()
+                  const rect = event.currentTarget.parentElement?.getBoundingClientRect()
+                  if (!rect) return
                   onSelect(target, time)
+                  event.currentTarget.setPointerCapture(event.pointerId)
+                  drag.current = {
+                    pointerId: event.pointerId,
+                    sourceTime: time,
+                    originX: event.clientX,
+                    laneLeft: rect.left,
+                    laneWidth: rect.width,
+                    active: false,
+                  }
+                }}
+                onPointerMove={(event) => {
+                  const state = drag.current
+                  if (!state || state.pointerId !== event.pointerId) return
+                  if (!state.active && Math.abs(event.clientX - state.originX) < 3) return
+                  state.active = true
+                  const preview = timelineTimeAtPointer(
+                    event.clientX,
+                    state.laneLeft,
+                    state.laneWidth,
+                    duration,
+                    fps,
+                  )
+                  setDragPreview({ sourceTime: state.sourceTime, time: preview })
+                }}
+                onPointerUp={(event) => {
+                  const state = drag.current
+                  if (!state || state.pointerId !== event.pointerId) return
+                  if (state.active) {
+                    const destination = timelineTimeAtPointer(
+                      event.clientX,
+                      state.laneLeft,
+                      state.laneWidth,
+                      duration,
+                      fps,
+                    )
+                    suppressClick.current = true
+                    window.setTimeout(() => {
+                      suppressClick.current = false
+                    }, 0)
+                    onMove(target, state.sourceTime, destination)
+                  }
+                  finishDrag()
+                  if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                    event.currentTarget.releasePointerCapture(event.pointerId)
+                  }
+                }}
+                onPointerCancel={(event) => {
+                  const state = drag.current
+                  if (!state || state.pointerId !== event.pointerId) return
+                  suppressClick.current = false
+                  finishDrag()
+                  if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                    event.currentTarget.releasePointerCapture(event.pointerId)
+                  }
+                }}
+                onClick={() => {
+                  if (suppressClick.current) {
+                    suppressClick.current = false
+                    return
+                  }
+                  onSelect(target, time)
+                }}
+                onKeyDown={(event) => {
+                  const state = drag.current
+                  if (event.key !== 'Escape' || !state) return
+                  event.preventDefault()
+                  suppressClick.current = false
+                  finishDrag()
+                  if (event.currentTarget.hasPointerCapture(state.pointerId)) {
+                    event.currentTarget.releasePointerCapture(state.pointerId)
+                  }
+                  onSelect(target, state.sourceTime)
                 }}
               />
             )

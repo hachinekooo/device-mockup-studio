@@ -4,6 +4,7 @@ import { EASE_LINEAR, EASE_SMOOTH } from './easing'
 import { deviceTracksForMotion } from './presets'
 import {
   keyTimes,
+  moveTrackValuesAt,
   removeTrackValuesAt,
   setKey,
   setTrackValuesAt,
@@ -167,6 +168,37 @@ describe('track editing', () => {
     let track = setKey(staticTrack(0), 1, 10, EASE_LINEAR)
     track = setKey(track, 1, 20)
     expect(track.keys[1].ease).toEqual(EASE_LINEAR)
+  })
+
+  it('retimes only keys that exist at the aggregate source time', () => {
+    const tracks = {
+      x: {
+        keys: [
+          { t: 0, v: 0, ease: EASE_SMOOTH },
+          { t: 1, v: 10, ease: EASE_LINEAR },
+          { t: 2, v: 20, ease: EASE_SMOOTH },
+        ],
+      },
+      y: { keys: [{ t: 2, v: 8, ease: EASE_SMOOTH }] },
+      z: {
+        keys: [
+          { t: 1, v: 3, ease: EASE_SMOOTH },
+          { t: 3, v: 9, ease: EASE_LINEAR },
+        ],
+      },
+    }
+
+    const moved = moveTrackValuesAt(tracks, 1, 2)
+
+    expect(moved.x.keys).toEqual([
+      { t: 0, v: 0, ease: EASE_SMOOTH },
+      { t: 2, v: 10, ease: EASE_LINEAR },
+    ])
+    expect(moved.y).toBe(tracks.y)
+    expect(moved.z.keys).toEqual([
+      { t: 2, v: 3, ease: EASE_SMOOTH },
+      { t: 3, v: 9, ease: EASE_LINEAR },
+    ])
   })
 
   it('editing a static channel does not accidentally create animation', () => {

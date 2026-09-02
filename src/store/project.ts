@@ -5,9 +5,10 @@ import { emptyHistory, record, redo, resetCoalescing, undo, type History } from 
 import type { ExportQuality } from '../export/frameRenderer'
 import { deserializeProject, downloadProject, pruneUnreferencedMedia, serializeProject } from './persist'
 import { applyCameraAngle, applyMotionPreset, type MotionPresetId } from '../timeline/presets'
-import { sampleTimeline } from '../timeline/sample'
+import { sampleTimeline, tracksEnd } from '../timeline/sample'
 import {
   keyTimes,
+  moveTrackValuesAt,
   removeTrackValuesAt,
   setTrackValuesAt,
   setVec3At,
@@ -145,6 +146,8 @@ type ProjectStore = {
   addDeviceKeyframe: (t: number) => void
   deleteCameraKeyframe: (t: number) => void
   deleteDeviceKeyframe: (t: number) => void
+  moveCameraKeyframe: (from: number, to: number) => void
+  moveDeviceKeyframe: (from: number, to: number) => void
 }
 
 // Narrow selectors are used at call sites (§14 trap 10) — components should
@@ -156,7 +159,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
    * out of sync with the set of actions. `label` groups a continuous gesture
    * (a field drag, a slider) into one history entry.
    */
-  const edit = (label: string, update: (p: Project) => Project) =>
+  const edit = (label: string | undefined, update: (p: Project) => Project) =>
     set((s) => ({
       project: update(s.project),
       history: record(s.history, s.project, label),
@@ -246,10 +249,22 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   setEditorMode: (editorMode) => set({ editorMode }),
   setName: (name) => edit('name', (p) => ({ ...p, name })),
 
-  setPlayhead: (t) => set({ playhead: Math.max(0, t) }),
+  setPlayhead: (t) => set({ playhead: Math.min(get().project.duration, Math.max(0, t)) }),
   setPlaying: (playing) => set({ playing }),
-  setDuration: (seconds) =>
-    edit('duration', (p) => ({ ...p, duration: Math.max(0.1, seconds) })),
+  setDuration: (seconds) => {
+    const project = get().project
+    const contentEnd = Math.max(
+      tracksEnd(project.camera.tracks),
+      ...project.devices.map((device) => tracksEnd(device.transform)),
+    )
+    const duration = Math.max(0.1, contentEnd, seconds)
+    if (duration === project.duration) {
+      set((state) => ({ playhead: Math.min(state.playhead, duration) }))
+      return
+    }
+    edit('duration', (p) => ({ ...p, duration }))
+    set((state) => ({ playhead: Math.min(state.playhead, duration) }))
+  },
   // Frame rate is a document property, not an export setting: it decides
   // which times the timeline is sampled at, so changing it changes the clip
   // rather than just the file.
@@ -403,6 +418,34 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       ...p,
       devices: p.devices.map((device, index) =>
         index === active ? { ...device, transform: next } : device,
+      ),
+    }))
+  },
+  moveCameraKeyframe: (from, to) => {
+    const tracks = get().project.camera.tracks
+    const time = Math.min(get().project.duration, Math.max(0, to))
+    const next = moveTrackValuesAt(tracks, from, time)
+    if (next === tracks) return
+    // Discrete commands must never coalesce when two quick drags happen to
+    // share the same action name; each drop is one independent undo step.
+    edit(undefined, (p) => ({
+      ...p,
+      camera: { ...p.camera, preset: null, tracks: moveTrackValuesAt(p.camera.tracks, from, time) },
+    }))
+  },
+  moveDeviceKeyframe: (from, to) => {
+    const active = get().activeDevice
+    const tracks = get().project.devices[active]?.transform
+    if (!tracks) return
+    const time = Math.min(get().project.duration, Math.max(0, to))
+    const next = moveTrackValuesAt(tracks, from, time)
+    if (next === tracks) return
+    edit(undefined, (p) => ({
+      ...p,
+      devices: p.devices.map((device, index) =>
+        index === active
+          ? { ...device, transform: moveTrackValuesAt(device.transform, from, time) }
+          : device,
       ),
     }))
   },
